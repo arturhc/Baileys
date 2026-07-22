@@ -147,7 +147,7 @@ pub struct ProcessImageOptions {
     pub height: Option<u32>,
     /// Output format
     pub format: ImageFormat,
-    /// Quality for lossy formats (JPEG, WebP). 1-100, default 80
+    /// JPEG quality from 1-100, default 80. Ignored for PNG and lossless WebP.
     #[tsify(optional)]
     pub quality: Option<u8>,
 }
@@ -224,10 +224,11 @@ pub fn process_image(
     };
 
     let (width, height) = processed.dimensions();
-    let quality = options.quality.unwrap_or(80).clamp(1, 100);
-
     let buffer = match options.format {
-        ImageFormat::Jpeg => encode_jpeg_quality(&processed, quality)?,
+        ImageFormat::Jpeg => {
+            let quality = options.quality.unwrap_or(80).clamp(1, 100);
+            encode_jpeg_quality(&processed, quality)?
+        }
         ImageFormat::Png => encode_format(&processed, image::ImageFormat::Png)?,
         ImageFormat::WebP => encode_format(&processed, image::ImageFormat::WebP)?,
     };

@@ -28,7 +28,7 @@ impl SessionRecord {
 
         // 2. Standard Array (sometimes passed by generic serialization)
         if Array::is_array(&val) {
-            return Ok(SessionRecord::new(js_array_to_vec(&Array::from(&val))?));
+            return Ok(SessionRecord::new(js_array_to_vec(val.unchecked_ref())?));
         }
 
         // 3. Legacy libsignal-node JSON format (has "_sessions" key)
@@ -41,7 +41,7 @@ impl SessionRecord {
         if let Ok(data) = Reflect::get(&val, &JsValue::from_str(DATA_KEY))
             && Array::is_array(&data)
         {
-            return Ok(SessionRecord::new(js_array_to_vec(&Array::from(&data))?));
+            return Ok(SessionRecord::new(js_array_to_vec(data.unchecked_ref())?));
         }
 
         Err(JsValue::from_str(INVALID_INPUT_ERROR))
@@ -69,7 +69,7 @@ fn create_empty_session_record() -> Result<SessionRecord, JsValue> {
 }
 
 pub(crate) fn js_array_to_vec(array: &Array) -> Result<Vec<u8>, JsValue> {
-    let mut bytes = Vec::with_capacity(array.length() as usize);
+    let mut bytes = Vec::new();
 
     for index in 0..array.length() {
         let value = array.get(index).as_f64().ok_or_else(|| {
