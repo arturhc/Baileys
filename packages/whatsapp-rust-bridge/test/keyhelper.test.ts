@@ -1,11 +1,11 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import {
   generateIdentityKeyPair,
   generatePreKey,
   generateRegistrationId,
   generateSignedPreKey,
   verifySignature,
-} from "../dist";
+} from "../dist/index.js";
 
 describe("keyhelper", () => {
   it("generates registration ids within the valid range", () => {
@@ -30,7 +30,9 @@ describe("keyhelper", () => {
   it("rejects invalid parameters", () => {
     // With tsify, invalid objects throw serde deserialization errors
     expect(() => generateSignedPreKey({} as any, 1)).toThrow();
-    expect(() => generateSignedPreKey({ pubKey: null, privKey: null } as any, 1)).toThrow();
+    expect(() =>
+      generateSignedPreKey({ pubKey: null, privKey: null } as any, 1),
+    ).toThrow();
   });
 
   it("generates unsigned pre-keys", () => {

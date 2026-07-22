@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +15,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
 const pkgWasm = resolve(root, "pkg/whatsapp_rust_bridge_bg.wasm");
 const outDir = resolve(root, "assets/wasm");
+const distWasmDir = resolve(root, "dist/wasm");
+const cargoFeatures = process.env.WHATSAPP_RUST_BRIDGE_CARGO_FEATURES?.trim();
 
 const wasmOptFlags = [
   "-O4",
@@ -50,11 +59,19 @@ function build(variant) {
     : "-C target-feature=-simd128";
 
   console.log(`\n=== Building ${variant} ===`);
-  run(
-    "wasm-pack",
-    ["build", "--target", "web", "--out-dir", "pkg", "--no-pack", "--no-opt"],
-    { RUSTFLAGS: rustflags },
-  );
+  const wasmPackArgs = [
+    "build",
+    "--target",
+    "web",
+    "--out-dir",
+    "pkg",
+    "--no-pack",
+    "--no-opt",
+  ];
+  if (cargoFeatures) {
+    wasmPackArgs.push("--features", cargoFeatures);
+  }
+  run("wasm-pack", wasmPackArgs, { RUSTFLAGS: rustflags });
 
   const outFile = resolve(outDir, `${variant}.wasm`);
   const optFlags = [
@@ -70,14 +87,73 @@ function build(variant) {
   console.log(`  → ${outFile} (${(size / 1024).toFixed(1)} KB)`);
 }
 
+function wasmBindgenTrampolines(wasmPath) {
+  const module = new WebAssembly.Module(readFileSync(wasmPath));
+  return WebAssembly.Module.exports(module)
+    .map(({ name }) => name)
+    .filter((name) => name.startsWith("__wasm_bindgen_func_elem_"));
+}
+
+function alignSimdExportsWithGlue() {
+  const simdPath = resolve(outDir, "simd.wasm");
+  const nosimdPath = resolve(outDir, "nosimd.wasm");
+  const simdExports = wasmBindgenTrampolines(simdPath);
+  const glueExports = wasmBindgenTrampolines(nosimdPath);
+
+  if (simdExports.length !== glueExports.length) {
+    throw new Error(
+      `SIMD/non-SIMD wasm-bindgen trampoline count differs (${simdExports.length} !== ${glueExports.length})`
+    );
+  }
+
+  const wasm = readFileSync(simdPath);
+  for (let i = 0; i < simdExports.length; i++) {
+    const sourceName = simdExports[i];
+    const targetName = glueExports[i];
+    if (sourceName === targetName) continue;
+    if (sourceName.length !== targetName.length) {
+      throw new Error(
+        `Cannot align wasm-bindgen trampoline names with different lengths: ${sourceName} -> ${targetName}`
+      );
+    }
+
+    const source = Buffer.from(sourceName);
+    const offset = wasm.indexOf(source);
+    if (offset < 0 || wasm.indexOf(source, offset + 1) >= 0) {
+      throw new Error(`Expected exactly one export named ${sourceName}`);
+    }
+    Buffer.from(targetName).copy(wasm, offset);
+  }
+
+  writeFileSync(simdPath, wasm);
+  const alignedExports = wasmBindgenTrampolines(simdPath);
+  if (alignedExports.some((name, i) => name !== glueExports[i])) {
+    throw new Error(
+      "Failed to align SIMD wasm-bindgen exports with generated glue"
+    );
+  }
+}
+
 if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
 
 build("simd");
 build("nosimd");
 
-// Make pkg/whatsapp_rust_bridge_bg.wasm point to the SIMD variant for the
-// wasm-bindgen JS wrapper's default URL resolution (rebuild simd last so
-// pkg ends in a clean state for `wasm-pack publish`-style consumers).
+// wasm-bindgen can number async trampoline exports differently when target
+// features change. The JS glue comes from the final non-SIMD build, so align
+// the equivalent SIMD export names before both binaries share that glue.
+alignSimdExportsWithGlue();
+
+// Keep wasm-bindgen's generated pkg/ output internally consistent. The
+// published Node entry points resolve the two explicit dist/wasm assets.
 copyFileSync(resolve(outDir, "simd.wasm"), pkgWasm);
+
+mkdirSync(distWasmDir, { recursive: true });
+for (const variant of ["simd", "nosimd"]) {
+  copyFileSync(
+    resolve(outDir, `${variant}.wasm`),
+    resolve(distWasmDir, `${variant}.wasm`),
+  );
+}
 
 console.log("\nDual wasm build complete.");

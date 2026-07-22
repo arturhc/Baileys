@@ -1,5 +1,5 @@
-import { describe, it, expect } from "bun:test";
-import { SessionRecord } from "../dist";
+import { describe, it, expect } from "@jest/globals";
+import { SessionRecord } from "../dist/index.js";
 
 describe("SessionRecord Compatibility & Migration", () => {
   it("should handle legacy libsignal-node JSON format by returning a safe empty session", () => {
@@ -88,5 +88,15 @@ describe("SessionRecord Compatibility & Migration", () => {
     expect(() => SessionRecord.deserialize("invalid string")).toThrow();
     expect(() => SessionRecord.deserialize(12345)).toThrow();
     expect(() => SessionRecord.deserialize(null)).toThrow();
+  });
+
+  it("should reject arrays containing invalid byte values", () => {
+    for (const input of [[1, "2", 3], [-1], [1.5], [256], [Number.NaN]]) {
+      expect(() => SessionRecord.deserialize(input)).toThrow("Invalid byte");
+    }
+
+    expect(() =>
+      SessionRecord.deserialize({ type: "Buffer", data: [1, null, 3] })
+    ).toThrow("Invalid byte");
   });
 });

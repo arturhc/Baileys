@@ -1,32 +1,37 @@
-import { describe, it, expect } from "bun:test";
-import { getEnabledFeatures } from "../dist";
-import { readFileSync } from "fs";
-import { join } from "path";
+import { describe, it, expect } from "@jest/globals";
+import { getEnabledFeatures } from "../dist/index.js";
+import { readFileSync } from "node:fs";
 
 const features = getEnabledFeatures();
+const describeSticker = features.sticker ? describe : describe.skip;
 
 // Only load assets if the feature is enabled
 const STATIC_WEBP = features.sticker
-  ? readFileSync(join(__dirname, "../assets/static.webp"))
+  ? readFileSync(new URL("../assets/static.webp", import.meta.url))
   : new Uint8Array();
 const ANIMATED_WEBP = features.sticker
-  ? readFileSync(join(__dirname, "../assets/animated.webp"))
+  ? readFileSync(new URL("../assets/animated.webp", import.meta.url))
   : new Uint8Array();
 
-// Conditionally import sticker functions (they won't exist if feature is disabled)
-const stickerFns = features.sticker
-  ? await import("../dist").then((m) => ({
-      addStickerMetadata: m.addStickerMetadata,
-      getStickerMetadata: m.getStickerMetadata,
-    }))
-  : { addStickerMetadata: null, getStickerMetadata: null };
+interface StickerMetadata {
+  packId?: string;
+  packName: string;
+  publisher: string;
+  emojis?: string[];
+  androidAppStoreLink?: string;
+  iosAppStoreLink?: string;
+}
 
-const { addStickerMetadata, getStickerMetadata } = stickerFns as {
-  addStickerMetadata: typeof import("../dist").addStickerMetadata;
-  getStickerMetadata: typeof import("../dist").getStickerMetadata;
-};
+interface StickerFunctions {
+  addStickerMetadata(input: Uint8Array, metadata: StickerMetadata): Uint8Array;
+  getStickerMetadata(input: Uint8Array): StickerMetadata | undefined;
+}
 
-describe.if(features.sticker)("Sticker Metadata", () => {
+const { addStickerMetadata, getStickerMetadata } = (features.sticker
+  ? await import("../dist/index.js")
+  : {}) as unknown as StickerFunctions;
+
+describeSticker("Sticker Metadata", () => {
   describe("addStickerMetadata", () => {
     it("adds metadata to a static WebP image", () => {
       const result = addStickerMetadata(STATIC_WEBP, {
@@ -65,7 +70,8 @@ describe.if(features.sticker)("Sticker Metadata", () => {
         packName: "Full Pack",
         publisher: "Full Author",
         emojis: ["😀", "😎", "🔥"],
-        androidAppStoreLink: "https://play.google.com/store/apps/details?id=test",
+        androidAppStoreLink:
+          "https://play.google.com/store/apps/details?id=test",
         iosAppStoreLink: "https://apps.apple.com/app/test/id123456789",
       };
 
@@ -81,11 +87,11 @@ describe.if(features.sticker)("Sticker Metadata", () => {
 
       // Read back the metadata to verify ID was generated
       const extracted = getStickerMetadata(result);
+      const packId = extracted?.packId ?? "";
       expect(extracted).not.toBeNull();
-      expect(extracted!.packId).toBeDefined();
-      expect(extracted!.packId.length).toBeGreaterThan(0);
+      expect(packId.length).toBeGreaterThan(0);
       // UUID format check
-      expect(extracted!.packId).toMatch(
+      expect(packId).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
       );
     });
@@ -142,7 +148,9 @@ describe.if(features.sticker)("Sticker Metadata", () => {
       expect(extracted!.packName).toBe("Complete Pack");
       expect(extracted!.publisher).toBe("Complete Author");
       expect(extracted!.emojis).toEqual(["😀", "😎"]);
-      expect(extracted!.androidAppStoreLink).toBe("https://play.google.com/test");
+      expect(extracted!.androidAppStoreLink).toBe(
+        "https://play.google.com/test"
+      );
       expect(extracted!.iosAppStoreLink).toBe("https://apps.apple.com/test");
     });
 

@@ -1,7 +1,7 @@
 use js_sys::{TypeError, Uint8Array};
 use rand::{Rng, rngs::StdRng};
 use serde::Serialize;
-use tsify_next::Tsify;
+use tsify::Tsify;
 use wacore_libsignal::core::curve::{KeyPair as CoreKeyPair, PrivateKey as CorePrivateKey};
 use wasm_bindgen::prelude::*;
 

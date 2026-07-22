@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 
 import {
   generateIdentityKeyPair,
@@ -7,8 +7,36 @@ import {
   generateSignedPreKey,
   ProtocolAddress,
   SessionBuilder,
-} from "../dist";
+} from "../dist/index.js";
 import { FakeStorage } from "./helpers/fake_storage";
+
+class AlwaysTrustStorage extends FakeStorage {
+  override async isTrustedIdentity(): Promise<boolean> {
+    return true;
+  }
+}
+
+function makeBundle(identityKeyPair = generateIdentityKeyPair()) {
+  const signedPreKey = generateSignedPreKey(identityKeyPair, 1);
+  const preKey = generatePreKey(22);
+
+  return {
+    identityKeyPair,
+    bundle: {
+      registrationId: generateRegistrationId(),
+      identityKey: identityKeyPair.pubKey,
+      signedPreKey: {
+        keyId: signedPreKey.keyId,
+        publicKey: signedPreKey.keyPair.pubKey,
+        signature: signedPreKey.signature,
+      },
+      preKey: {
+        keyId: preKey.keyId,
+        publicKey: preKey.keyPair.pubKey,
+      },
+    },
+  };
+}
 
 describe("SessionBuilder", () => {
   it("should successfully process a pre-key bundle and create a new session", async () => {
@@ -21,7 +49,7 @@ describe("SessionBuilder", () => {
     const bobSignedPreKeyId = 1337;
     const bobSignedPreKey = generateSignedPreKey(
       bobIdentityKeyPair,
-      bobSignedPreKeyId,
+      bobSignedPreKeyId
     );
     const bobPreKeyId = 22;
     const bobPreKey = generatePreKey(bobPreKeyId);
@@ -51,9 +79,36 @@ describe("SessionBuilder", () => {
     const isTrusted = await aliceStorage.isTrustedIdentity(
       "bob",
       bobIdentityKeyPair.pubKey,
-      0,
+      0
     );
     expect(isTrusted).toBe(true);
+    expect(aliceStorage.getIdentity("bob")).toEqual(bobIdentityKeyPair.pubKey);
+    expect(aliceStorage.identityLoadCount).toBeGreaterThan(0);
+    expect(aliceStorage.identitySaveCount).toBeGreaterThan(0);
+  });
+
+  it("should persist peer identities across adapter instances", async () => {
+    const storage = new AlwaysTrustStorage();
+    const bobAddress = new ProtocolAddress("bob-persisted", 1);
+    const first = makeBundle();
+
+    await new SessionBuilder(storage, bobAddress).processPreKeyBundle(
+      first.bundle
+    );
+    expect(storage.getIdentity("bob-persisted")).toEqual(
+      first.identityKeyPair.pubKey
+    );
+
+    const second = makeBundle();
+    await new SessionBuilder(storage, bobAddress).processPreKeyBundle(
+      second.bundle
+    );
+
+    expect(storage.getIdentity("bob-persisted")).toEqual(
+      second.identityKeyPair.pubKey
+    );
+    expect(storage.identityLoadCount).toBeGreaterThanOrEqual(2);
+    expect(storage.identitySaveCount).toBeGreaterThanOrEqual(2);
   });
 
   it("should throw an error for an untrusted identity", async () => {
@@ -78,7 +133,9 @@ describe("SessionBuilder", () => {
     };
 
     await expect(
-      aliceSessionBuilder.processPreKeyBundle(bobBundle),
-    ).rejects.toThrow("untrusted identity for address bob.1");
+      aliceSessionBuilder.processPreKeyBundle(bobBundle)
+    ).rejects.toEqual(
+      expect.stringContaining("untrusted identity for address bob.1")
+    );
   });
 });

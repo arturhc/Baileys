@@ -1,10 +1,10 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import { randomBytes } from "crypto";
-import { md5, hkdf } from "../dist";
+import { md5, hkdf } from "../dist/index.js";
 import {
   md5 as baileysMd5,
   hkdf as baileysHkdf,
-} from "baileys/lib/Utils/crypto";
+} from "baileys/lib/Utils/crypto.js";
 
 function hex(buffer: Uint8Array | Buffer): string {
   return Buffer.from(buffer).toString("hex");
@@ -54,7 +54,7 @@ describe("Crypto Parity: HKDF", () => {
   it("should derive with empty salt identically", async () => {
     const ikm = randomBytes(32);
 
-    const wasmResult = hkdf(ikm, 32, { salt: null, info: undefined });
+    const wasmResult = hkdf(ikm, 32, {});
     const baileysResult = await baileysHkdf(ikm, 32, {});
 
     expect(hex(wasmResult)).toBe(hex(baileysResult));

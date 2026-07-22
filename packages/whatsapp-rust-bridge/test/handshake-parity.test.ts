@@ -1,6 +1,6 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import { encodeBinaryNode } from "baileys";
-import { encodeNode, decodeNode, type BinaryNode } from "../dist";
+import { encodeNode, decodeNode, type BinaryNode } from "../dist/index.js";
 
 function hex(buffer: Uint8Array): string {
   return Buffer.from(buffer).toString("hex");
@@ -439,7 +439,12 @@ describe("Attribute Order Sensitivity", () => {
 
     const legacy1 = encodeBinaryNode(node1);
     const legacy2 = encodeBinaryNode(node2);
+    const wasm1 = encodeNode(node1);
+    const wasm2 = encodeNode(node2);
 
+    expectByteIdentical(wasm1, legacy1, "first attribute order");
+    expectByteIdentical(wasm2, legacy2, "second attribute order");
     expect(hex(legacy1)).not.toBe(hex(legacy2));
+    expect(hex(wasm1)).not.toBe(hex(wasm2));
   });
 });

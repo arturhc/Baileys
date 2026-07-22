@@ -1,5 +1,5 @@
-import { describe, it, expect } from "bun:test";
-import { ProtocolAddress, GroupCipher } from "../dist";
+import { describe, it, expect } from "@jest/globals";
+import { ProtocolAddress, GroupCipher } from "../dist/index.js";
 import { FakeStorage } from "./helpers/fake_storage";
 
 describe("Legacy SenderKey Migration", () => {
@@ -31,7 +31,7 @@ describe("Legacy SenderKey Migration", () => {
     // Store it in the fake storage
     storage.senderKeys.set(
       `${groupId}::${sender.id}::${sender.deviceId}`,
-      legacyBytes,
+      legacyBytes
     );
 
     const cipher = new GroupCipher(storage, groupId, sender);

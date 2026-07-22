@@ -17,7 +17,7 @@ boxplot(() => {
     });
 
     // Async - uses sharp internally
-    bench("Profile Picture libsignal-node", async () => {
+    bench("Profile Picture Baileys", async () => {
       const profilePicture = await generateProfilePictureOld(fileBuffer, {
         width: 96,
         height: 96,
@@ -34,7 +34,7 @@ boxplot(() => {
     });
 
     // Async - uses sharp internally
-    bench("Extract thumbnail libsignal-node", async () => {
+    bench("Extract thumbnail Baileys", async () => {
       const thumbnail = await extractImageThumbOld(fileBuffer, 96);
       do_not_optimize(thumbnail);
     });

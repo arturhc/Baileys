@@ -1,9 +1,9 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import {
   encodeBinaryNode,
   decodeBinaryNode as legacyDecodeNode,
 } from "baileys";
-import { decodeNode, encodeNode, type BinaryNode } from "../dist";
+import { decodeNode, encodeNode, type BinaryNode } from "../dist/index.js";
 
 // Helper to visualize buffer differences
 function hex(buffer: Uint8Array): string {

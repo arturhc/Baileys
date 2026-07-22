@@ -1,37 +1,48 @@
-import { describe, it, expect } from "bun:test";
-import { getEnabledFeatures } from "../dist";
+import { describe, it, expect } from "@jest/globals";
+import { getEnabledFeatures } from "../dist/index.js";
 import fs from "node:fs";
 
 const features = getEnabledFeatures();
+const describeImage = features.image ? describe : describe.skip;
 
 // 1x1 red PNG pixel (base64)
 const SAMPLE_IMAGE =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAABAAAAAQBPJcTWAAAADElEQVR4nGP8x8AAAAMCAQBFsWYPAAAAAElFTkSuQmCC";
+// 8193x1 PNG: small encoded payload with a declared dimension above the decoder limit.
+const OVERSIZED_IMAGE =
+  "iVBORw0KGgoAAAANSUhEUgAAIAEAAAABCAIAAAAW69wJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAL0lEQVR4nO3BMQEAAADCoPVPbQlPoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgA4GYAQAATBvg1EAAAAASUVORK5CYII=";
 
 // Only load image assets if the feature is enabled
 const PNG_BUFFER = features.image
-  ? fs.readFileSync("assets/image.png")
+  ? fs.readFileSync(new URL("../assets/image.png", import.meta.url))
   : new Uint8Array();
 const WEBP_BUFFER = features.image
-  ? fs.readFileSync("assets/static.webp")
+  ? fs.readFileSync(new URL("../assets/static.webp", import.meta.url))
   : new Uint8Array();
 
-// Conditionally import image functions (they won't exist if feature is disabled)
-const imageFns = features.image
-  ? await import("../dist").then((m) => ({
-      extractImageThumb: m.extractImageThumb,
-      generateProfilePicture: m.generateProfilePicture,
-      getImageDimensions: m.getImageDimensions,
-      convertToWebP: m.convertToWebP,
-      processImage: m.processImage,
-    }))
-  : {
-      extractImageThumb: null,
-      generateProfilePicture: null,
-      getImageDimensions: null,
-      convertToWebP: null,
-      processImage: null,
-    };
+interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+interface ImageFunctions {
+  extractImageThumb(
+    input: Uint8Array,
+    width: number
+  ): { buffer: Uint8Array; original: ImageDimensions };
+  generateProfilePicture(input: Uint8Array, width: number): { img: Uint8Array };
+  getImageDimensions(input: Uint8Array): ImageDimensions;
+  convertToWebP(input: Uint8Array): Uint8Array;
+  processImage(
+    input: Uint8Array,
+    options: {
+      width?: number;
+      height?: number;
+      format: "jpeg" | "png" | "webp";
+      quality?: number;
+    }
+  ): { buffer: Uint8Array; width: number; height: number };
+}
 
 const {
   extractImageThumb,
@@ -39,13 +50,9 @@ const {
   getImageDimensions,
   convertToWebP,
   processImage,
-} = imageFns as {
-  extractImageThumb: typeof import("../dist").extractImageThumb;
-  generateProfilePicture: typeof import("../dist").generateProfilePicture;
-  getImageDimensions: typeof import("../dist").getImageDimensions;
-  convertToWebP: typeof import("../dist").convertToWebP;
-  processImage: typeof import("../dist").processImage;
-};
+} = (features.image
+  ? await import("../dist/index.js")
+  : {}) as unknown as ImageFunctions;
 
 // Magic bytes for format detection
 const MAGIC = {
@@ -67,13 +74,16 @@ function isValidFormat(
     return (
       buffer.length >= 12 &&
       hasPrefix(buffer, MAGIC.webp) &&
-      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+      buffer[8] === 0x57 &&
+      buffer[9] === 0x45 &&
+      buffer[10] === 0x42 &&
+      buffer[11] === 0x50
     );
   }
   return hasPrefix(buffer, MAGIC[format]);
 }
 
-describe.if(features.image)("Image Utils", () => {
+describeImage("Image Utils", () => {
   const imageBuffer = Buffer.from(SAMPLE_IMAGE, "base64");
 
   it("extracts an image thumbnail", () => {
@@ -101,9 +111,14 @@ describe.if(features.image)("Image Utils", () => {
     const invalidBuffer = new Uint8Array([0, 1, 2, 3]);
     expect(() => extractImageThumb(invalidBuffer, 32)).toThrow();
   });
+
+  it("rejects oversized target dimensions", () => {
+    expect(() => extractImageThumb(imageBuffer, 8_193)).toThrow("8192");
+    expect(() => generateProfilePicture(imageBuffer, 8_193)).toThrow("8192");
+  });
 });
 
-describe.if(features.image)("getImageDimensions", () => {
+describeImage("getImageDimensions", () => {
   it("returns correct dimensions for PNG", () => {
     const dims = getImageDimensions(PNG_BUFFER);
     expect(dims.width).toBe(1000);
@@ -119,9 +134,14 @@ describe.if(features.image)("getImageDimensions", () => {
   it("throws on invalid data", () => {
     expect(() => getImageDimensions(new Uint8Array([1, 2, 3]))).toThrow();
   });
+
+  it("rejects images with oversized declared dimensions", () => {
+    const oversized = Buffer.from(OVERSIZED_IMAGE, "base64");
+    expect(() => getImageDimensions(oversized)).toThrow();
+  });
 });
 
-describe.if(features.image)("convertToWebP", () => {
+describeImage("convertToWebP", () => {
   it("converts PNG to valid WebP", () => {
     const result = convertToWebP(PNG_BUFFER);
     expect(isValidFormat(result, "webp")).toBe(true);
@@ -133,7 +153,7 @@ describe.if(features.image)("convertToWebP", () => {
   });
 });
 
-describe.if(features.image)("processImage", () => {
+describeImage("processImage", () => {
   it("resizes to exact dimensions", () => {
     const result = processImage(PNG_BUFFER, {
       width: 100,
@@ -159,8 +179,22 @@ describe.if(features.image)("processImage", () => {
   it("converts between formats", () => {
     const formats = ["jpeg", "png", "webp"] as const;
     for (const format of formats) {
-      const result = processImage(PNG_BUFFER, { width: 50, height: 50, format });
+      const result = processImage(PNG_BUFFER, {
+        width: 50,
+        height: 50,
+        format,
+      });
       expect(isValidFormat(result.buffer, format)).toBe(true);
     }
+  });
+
+  it("rejects oversized resize dimensions", () => {
+    expect(() =>
+      processImage(PNG_BUFFER, {
+        width: 8_193,
+        height: 100,
+        format: "jpeg",
+      })
+    ).toThrow("8192");
   });
 });

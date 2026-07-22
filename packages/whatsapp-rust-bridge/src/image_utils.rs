@@ -1,12 +1,14 @@
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
-use image::{DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, ImageReader, Limits};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
-use tsify_next::Tsify;
+use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 const JPEG_QUALITY: u8 = 50;
+const MAX_IMAGE_DIMENSION: u32 = 8_192;
+const MAX_IMAGE_ALLOCATION: u64 = 256 * 1024 * 1024;
 
 /// Original image dimensions
 #[derive(Debug, Clone, Serialize, Tsify)]
@@ -37,9 +39,7 @@ pub struct ProfilePictureResult {
 
 #[wasm_bindgen(js_name = extractImageThumb)]
 pub fn extract_image_thumb(image_data: &[u8], width: u32) -> Result<ImageThumbResult, JsValue> {
-    if width == 0 {
-        return Err(JsValue::from_str("width must be greater than zero"));
-    }
+    validate_dimension("width", width)?;
 
     let img = load_image(image_data)?;
     let (orig_width, orig_height) = img.dimensions();
@@ -60,9 +60,7 @@ pub fn generate_profile_picture(
     image_data: &[u8],
     target_width: u32,
 ) -> Result<ProfilePictureResult, JsValue> {
-    if target_width == 0 {
-        return Err(JsValue::from_str("target width must be greater than zero"));
-    }
+    validate_dimension("target width", target_width)?;
 
     let resized =
         load_image(image_data)?.resize_to_fill(target_width, target_width, FilterType::Triangle);
@@ -72,8 +70,55 @@ pub fn generate_profile_picture(
 }
 
 fn load_image(image_data: &[u8]) -> Result<DynamicImage, JsValue> {
-    image::load_from_memory(image_data)
-        .map_err(|e| JsValue::from_str(&format!("Failed to load image: {e}")))
+    let mut reader = ImageReader::new(Cursor::new(image_data))
+        .with_guessed_format()
+        .map_err(|e| JsValue::from_str(&format!("Failed to load image: {e}")))?;
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(MAX_IMAGE_ALLOCATION);
+    reader.limits(limits);
+
+    let image = reader
+        .decode()
+        .map_err(|e| JsValue::from_str(&format!("Failed to load image: {e}")))?;
+    let (width, height) = image.dimensions();
+    validate_dimension("image width", width)?;
+    validate_dimension("image height", height)?;
+
+    Ok(image)
+}
+
+fn validate_dimension(name: &str, value: u32) -> Result<(), JsValue> {
+    if value == 0 {
+        return Err(JsValue::from_str(&format!(
+            "{name} must be greater than zero"
+        )));
+    }
+
+    if value > MAX_IMAGE_DIMENSION {
+        return Err(JsValue::from_str(&format!(
+            "{name} must not exceed {MAX_IMAGE_DIMENSION} pixels"
+        )));
+    }
+
+    Ok(())
+}
+
+fn scaled_dimension(source_primary: u32, source_secondary: u32, target: u32) -> u64 {
+    u64::from(source_secondary)
+        .saturating_mul(u64::from(target))
+        .div_ceil(u64::from(source_primary))
+}
+
+fn validate_scaled_dimension(name: &str, value: u64) -> Result<u32, JsValue> {
+    if value > u64::from(MAX_IMAGE_DIMENSION) {
+        return Err(JsValue::from_str(&format!(
+            "scaled {name} must not exceed {MAX_IMAGE_DIMENSION} pixels"
+        )));
+    }
+
+    Ok(value as u32)
 }
 
 fn encode_jpeg(image: &DynamicImage) -> Result<Vec<u8>, JsValue> {
@@ -95,12 +140,15 @@ pub enum ImageFormat {
 #[tsify(from_wasm_abi)]
 pub struct ProcessImageOptions {
     /// Target width (optional, maintains aspect ratio if only width is set)
+    #[tsify(optional)]
     pub width: Option<u32>,
     /// Target height (optional, maintains aspect ratio if only height is set)
+    #[tsify(optional)]
     pub height: Option<u32>,
     /// Output format
     pub format: ImageFormat,
     /// Quality for lossy formats (JPEG, WebP). 1-100, default 80
+    #[tsify(optional)]
     pub quality: Option<u8>,
 }
 
@@ -115,7 +163,7 @@ pub struct ProcessImageResult {
     pub height: u32,
 }
 
-/// Get image dimensions without full decoding
+/// Get decoded image dimensions with the same resource limits as other image operations
 #[wasm_bindgen(js_name = getImageDimensions)]
 pub fn get_image_dimensions(image_data: &[u8]) -> Result<ImageDimensions, JsValue> {
     let img = load_image(image_data)?;
@@ -137,7 +185,15 @@ pub fn process_image(
     image_data: Vec<u8>,
     options: ProcessImageOptions,
 ) -> Result<ProcessImageResult, JsValue> {
+    if let Some(width) = options.width {
+        validate_dimension("width", width)?;
+    }
+    if let Some(height) = options.height {
+        validate_dimension("height", height)?;
+    }
+
     let img = load_image(&image_data)?;
+    let (source_width, source_height) = img.dimensions();
 
     // Resize if dimensions are specified
     let processed = match (options.width, options.height) {
@@ -147,11 +203,19 @@ pub fn process_image(
         }
         (Some(w), None) => {
             // Only width specified - maintain aspect ratio
-            img.resize(w, u32::MAX, FilterType::Triangle)
+            let height = validate_scaled_dimension(
+                "height",
+                scaled_dimension(source_width, source_height, w),
+            )?;
+            img.resize(w, height, FilterType::Triangle)
         }
         (None, Some(h)) => {
             // Only height specified - maintain aspect ratio
-            img.resize(u32::MAX, h, FilterType::Triangle)
+            let width = validate_scaled_dimension(
+                "width",
+                scaled_dimension(source_height, source_width, h),
+            )?;
+            img.resize(width, h, FilterType::Triangle)
         }
         (None, None) => {
             // No resize, just format conversion

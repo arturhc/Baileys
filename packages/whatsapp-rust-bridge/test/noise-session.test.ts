@@ -1,10 +1,10 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import {
   NoiseSession,
   encodeNode,
   getWAConnHeader,
   type BinaryNode,
-} from "../dist";
+} from "../dist/index.js";
 import { randomBytes } from "crypto";
 import {
   aesEncryptGCM,
@@ -12,8 +12,8 @@ import {
   sha256,
   hkdf,
   Curve,
-} from "baileys/lib/Utils/crypto";
-import { makeNoiseHandler } from "baileys/lib/Utils/noise-handler";
+} from "baileys/lib/Utils/crypto.js";
+import { makeNoiseHandler } from "baileys/lib/Utils/noise-handler.js";
 
 // Pino logger mock for makeNoiseHandler
 const mockLogger = {

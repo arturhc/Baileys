@@ -281,7 +281,7 @@ boxplot(() => {
       );
       const newHash = await LT_HASH_ANTI_TAMPERING.subtractThenAdd(
         baseHash.buffer as ArrayBuffer,
-        [contentMac.buffer as ArrayBuffer],
+        [new Uint8Array(contentMac).buffer],
         []
       );
       const snapMac = baileysGenerateSnapshotMac(

@@ -14,7 +14,7 @@ The library is **dual-use**: legitimate automation, bots, and integrations on on
 
 This is a pnpm monorepo with two published packages:
 
-```
+```text
 packages/
   baileys/                         The npm `baileys` library
     src/
@@ -33,7 +33,7 @@ packages/
     src/                           Rust crate
     ts/                            TypeScript wrapper that boots WASM (SIMD probe + fallback)
     scripts/                       build-wasm.mjs, fetch-prebuilt.mjs (postinstall)
-    test/                          Bun-driven crate tests
+    test/                          Jest-driven crate tests
     benches/                       Mitata benchmarks
 proto-extract/                     Tooling to refresh protobufs from WA Web (separate, npm-managed)
 .github/workflows/                 CI — lint, test, e2e, build, bridge-build, release
@@ -43,14 +43,14 @@ proto-extract/                     Tooling to refresh protobufs from WA Web (sep
 
 ### whatsapp-rust-bridge in dev
 
-The Rust crate compiles to WebAssembly that gets inlined as base64 into a single `dist/index.js` (bun build does this via macros). Most contributors **do not** need the Rust toolchain — `pnpm install` runs `packages/whatsapp-rust-bridge/scripts/fetch-prebuilt.mjs` as a postinstall and pulls the prebuilt tarball straight from npm (verifying SHA-256 against `dist.sha256`).
+The Rust crate compiles separate SIMD and non-SIMD WebAssembly files under `dist/wasm/`. Small Node-only ESM (`dist/index.js`) and CommonJS (`dist/index.cjs`) entry points load only the supported variant from disk. Most contributors **do not** need the Rust toolchain — `pnpm install` runs `packages/whatsapp-rust-bridge/scripts/fetch-prebuilt.mjs` as a postinstall and pulls the prebuilt tarball straight from npm (verifying SHA-256 against `dist.sha256`).
 
 If you are working on the Rust crate:
 
 ```bash
 # Skip the prebuilt fetch and use your local build instead.
 WHATSAPP_RUST_BRIDGE_SKIP_PREBUILT=1 pnpm install
-pnpm --filter whatsapp-rust-bridge build   # needs cargo, wasm-pack, wasm-opt, bun
+pnpm --filter whatsapp-rust-bridge build   # needs cargo, wasm-pack, and wasm-opt
 ```
 
 A new bridge release goes out by tagging `whatsapp-rust-bridge@<version>` — the `bridge-release.yml` workflow builds, publishes to npm, and opens a follow-up PR refreshing `dist.sha256`.

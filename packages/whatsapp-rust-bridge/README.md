@@ -23,7 +23,7 @@ npm install whatsapp-rust-bridge
 pnpm add whatsapp-rust-bridge
 ```
 
-The published package ships a single `dist/index.js` (~2 MB) that has both a SIMD and a non-SIMD WebAssembly module inlined as base64. Runtime picks the right one via `WebAssembly.validate(SIMD_PROBE)`. There is no separate `.wasm` file to load and no native dependencies.
+The published package ships Node.js ESM (`dist/index.js`) and CommonJS (`dist/index.cjs`) entry points plus separate SIMD and non-SIMD modules under `dist/wasm/`. Runtime probes SIMD support and reads only the selected module. Keep the complete installed package when deploying; copying an entry-point file without its adjacent `wasm/` directory is not supported. There are no native dependencies.
 
 To force the non-SIMD variant:
 

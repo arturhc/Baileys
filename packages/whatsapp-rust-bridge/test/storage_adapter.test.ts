@@ -1,6 +1,85 @@
-import { describe, it, expect } from "bun:test";
-import { ProtocolAddress, SessionCipher, SessionRecord } from "../dist";
+import { describe, it, expect } from "@jest/globals";
+import {
+  GroupSessionBuilder,
+  ProtocolAddress,
+  SenderKeyName,
+  SessionBuilder,
+  SessionCipher,
+  SessionRecord,
+  generateIdentityKeyPair,
+  generatePreKey,
+  generateRegistrationId,
+  generateSignedPreKey,
+} from "../dist/index.js";
 import { FakeStorage } from "./helpers/fake_storage";
+
+class RejectingPersistenceStorage extends FakeStorage {
+  public failSessionStore = true;
+  public failSenderKeyStore = true;
+  public failIdentityStore = false;
+  public sessionLoadCount = 0;
+  public senderKeyLoadCount = 0;
+
+  override async loadSession(address: string): Promise<Uint8Array | undefined> {
+    this.sessionLoadCount += 1;
+    return super.loadSession(address);
+  }
+
+  override async storeSessionRaw(
+    address: string,
+    data: Uint8Array
+  ): Promise<void> {
+    if (this.failSessionStore) {
+      throw new Error("session persistence failed");
+    }
+    await super.storeSessionRaw(address, data);
+  }
+
+  override async loadSenderKey(keyId: string): Promise<Uint8Array | undefined> {
+    this.senderKeyLoadCount += 1;
+    return super.loadSenderKey(keyId);
+  }
+
+  override async storeSenderKey(
+    keyId: string,
+    record: Uint8Array
+  ): Promise<void> {
+    if (this.failSenderKeyStore) {
+      throw new Error("sender-key persistence failed");
+    }
+    await super.storeSenderKey(keyId, record);
+  }
+
+  override async saveIdentity(
+    identifier: string,
+    identityKey: Uint8Array
+  ): Promise<boolean> {
+    if (this.failIdentityStore) {
+      throw new Error("identity persistence failed");
+    }
+    return super.saveIdentity(identifier, identityKey);
+  }
+}
+
+function makePreKeyBundle() {
+  const identity = generateIdentityKeyPair();
+  const signedPreKey = generateSignedPreKey(identity, 1);
+  const preKey = generatePreKey(2);
+
+  return {
+    registrationId: generateRegistrationId(),
+    identityKey: identity.pubKey,
+    signedPreKey: {
+      keyId: signedPreKey.keyId,
+      publicKey: signedPreKey.keyPair.pubKey,
+      signature: signedPreKey.signature,
+    },
+    preKey: {
+      keyId: preKey.keyId,
+      publicKey: preKey.keyPair.pubKey,
+    },
+  };
+}
 
 describe("StorageAdapter Interop", () => {
   const aliceAddress = new ProtocolAddress("alice", 1);
@@ -77,5 +156,70 @@ describe("StorageAdapter Interop", () => {
       expect(msg).not.toContain("Protobuf");
       expect(msg).not.toContain("invalid wire type");
     }
+  });
+
+  it("should reject invalid byte arrays returned by storage", async () => {
+    const storage = new FakeStorage();
+    storage.loadSession = async () =>
+      [1, "invalid", 3] as unknown as Uint8Array;
+
+    const cipher = new SessionCipher(storage, aliceAddress);
+    await expect(cipher.hasOpenSession()).rejects.toEqual(
+      expect.stringContaining("Invalid byte")
+    );
+  });
+
+  it("should not cache a session when persistence rejects", async () => {
+    const storage = new RejectingPersistenceStorage();
+    const builder = new SessionBuilder(storage, aliceAddress);
+    const bundle = makePreKeyBundle();
+
+    await expect(builder.processPreKeyBundle(bundle)).rejects.toEqual(
+      expect.stringContaining("session persistence failed")
+    );
+    expect(storage.sessionLoadCount).toBe(1);
+
+    storage.failSessionStore = false;
+    await builder.processPreKeyBundle(bundle);
+
+    expect(storage.sessionLoadCount).toBe(2);
+    expect(storage.getSession(aliceAddress.toString())).toBeDefined();
+  });
+
+  it("should not cache a sender key when persistence rejects", async () => {
+    const storage = new RejectingPersistenceStorage();
+    const builder = new GroupSessionBuilder(storage);
+    const senderKeyName = new SenderKeyName("cache-test@g.us", aliceAddress);
+
+    await expect(builder.create(senderKeyName)).rejects.toEqual(
+      expect.stringContaining("sender-key persistence failed")
+    );
+    expect(storage.senderKeyLoadCount).toBe(1);
+
+    storage.failSenderKeyStore = false;
+    await builder.create(senderKeyName);
+
+    expect(storage.senderKeyLoadCount).toBe(2);
+    expect(storage.senderKeys.get(senderKeyName.toString())).toBeDefined();
+  });
+
+  it("should not cache a peer identity when persistence rejects", async () => {
+    const storage = new RejectingPersistenceStorage();
+    storage.failIdentityStore = true;
+    const builder = new SessionBuilder(storage, aliceAddress);
+    const bundle = makePreKeyBundle();
+
+    await expect(builder.processPreKeyBundle(bundle)).rejects.toEqual(
+      expect.stringContaining("identity persistence failed")
+    );
+    expect(storage.identityLoadCount).toBe(1);
+    expect(storage.getIdentity("alice")).toBeUndefined();
+
+    storage.failIdentityStore = false;
+    storage.failSessionStore = false;
+    await builder.processPreKeyBundle(bundle);
+
+    expect(storage.identityLoadCount).toBe(2);
+    expect(storage.getIdentity("alice")).toEqual(bundle.identityKey);
   });
 });

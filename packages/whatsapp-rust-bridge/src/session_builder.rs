@@ -1,6 +1,6 @@
 use rand::rngs::StdRng;
 use serde::Deserialize;
-use tsify_next::Tsify;
+use tsify::Tsify;
 use wasm_bindgen::{JsValue, prelude::*};
 
 use crate::protocol_address::ProtocolAddress;

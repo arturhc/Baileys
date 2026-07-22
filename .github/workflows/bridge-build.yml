@@ -5,18 +5,27 @@ name: Bridge WASM Build
 # usable bundle, even though postinstall normally pulls a prebuilt
 # tarball from npm.
 #
-# A separate job (release-bridge.yml) handles tagged releases and the
+# A separate job (bridge-release.yml) handles tagged releases and the
 # actual npm publish.
 
 on:
   push:
     branches:
       - master
+      - develop
     paths:
       - 'packages/whatsapp-rust-bridge/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/bridge-build.yml'
   pull_request:
     paths:
       - 'packages/whatsapp-rust-bridge/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/bridge-build.yml'
 
 permissions:
   contents: read
@@ -38,6 +47,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
         with:
@@ -47,10 +58,6 @@ jobs:
         with:
           node-version: 20.x
           cache: 'pnpm'
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
 
       - name: Install Rust toolchain (pinned via rust-toolchain.toml)
         run: rustup show
@@ -94,6 +101,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint Rust
+        run: cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings
+
       - name: Skip postinstall download
         working-directory: ${{ github.workspace }}
         run: echo "WHATSAPP_RUST_BRIDGE_SKIP_PREBUILT=1" >> "$GITHUB_ENV"
@@ -105,9 +118,21 @@ jobs:
       - name: Build bridge from source
         run: pnpm build
 
-      - name: Sanity-check the freshly built bundle loads
-        run: |
-          node -e "import('./dist/index.js').then(m => { if (!m) { process.exit(1); } console.log('bridge module exports OK'); });"
+      - name: Run bridge typecheck and Jest tests
+        run: pnpm test:typecheck && pnpm test:jest
 
-      - name: Run bridge tests
-        run: bun test
+      - name: Test installed package, ESM/CommonJS, and WASM selection
+        run: pnpm test:package
+
+      - name: Build bridge with all optional features
+        env:
+          WHATSAPP_RUST_BRIDGE_CARGO_FEATURES: image,audio,sticker
+        run: pnpm build
+
+      - name: Run optional-feature tests
+        run: pnpm test
+
+      - name: Run optional-feature tests without SIMD
+        env:
+          WHATSAPP_RUST_BRIDGE_FORCE_NOSIMD: '1'
+        run: pnpm test

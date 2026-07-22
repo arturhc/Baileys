@@ -2,7 +2,7 @@ use curve25519_dalek::{Scalar, constants::ED25519_BASEPOINT_TABLE};
 use js_sys::Uint8Array;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
-use tsify_next::Tsify;
+use tsify::Tsify;
 use wacore_libsignal::{
     core::curve::{
         KeyPair as CoreKeyPair, PrivateKey as CorePrivateKey, PublicKey as CorePublicKey,

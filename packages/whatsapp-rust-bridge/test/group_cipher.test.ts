@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import {
   GroupCipher,
   GroupSessionBuilder,
@@ -6,7 +6,7 @@ import {
   SenderKeyRecord,
   SenderKeyDistributionMessage,
   ProtocolAddress,
-} from "../dist";
+} from "../dist/index.js";
 import { FakeStorage } from "./helpers/fake_storage";
 
 class LoggedFakeStorage extends FakeStorage {
@@ -129,7 +129,8 @@ describe("Group Encryption end-to-end", () => {
     // Bob attempts to decrypt without having processed the distribution message
     const bobCipher = new GroupCipher(bobStorage, groupId, aliceAddress);
 
-    // The decrypt call should reject because there's no sender key record for Alice
-    await expect(bobCipher.decrypt(ciphertext)).rejects.toThrow(); // Bun's toReject() is simple and effective
+    await expect(bobCipher.decrypt(ciphertext)).rejects.toEqual(
+      expect.stringContaining("no sender key record"),
+    );
   });
 });

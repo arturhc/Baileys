@@ -12,7 +12,11 @@ const node: BinaryNode = {
   attrs: { id: "abc-123", to: "s.whatsapp.net", type: "get" },
   content: [
     { tag: "ping", attrs: {}, content: undefined },
-    { tag: "data", attrs: { fmt: "raw" }, content: new Uint8Array([1, 2, 3, 4, 5]) },
+    {
+      tag: "data",
+      attrs: { fmt: "raw" },
+      content: new Uint8Array([1, 2, 3, 4, 5]),
+    },
   ],
 };
 
@@ -26,9 +30,13 @@ const decodedAttrsOk =
   decoded.attrs.type === "get";
 
 const md5Result = md5(new Uint8Array([0x61, 0x62, 0x63])); // "abc" → 900150983cd24fb0d6963f7d28e17f72
-const md5Hex = Array.from(md5Result).map((b) => b.toString(16).padStart(2, "0")).join("");
+const md5Hex = Array.from(md5Result)
+  .map((b) => b.toString(16).padStart(2, "0"))
+  .join("");
 
-const hkdfResult = hkdf(new Uint8Array([1, 2, 3]), 32, new Uint8Array(0));
+const hkdfResult = hkdf(new Uint8Array([1, 2, 3]), 32, {
+  salt: new Uint8Array(0),
+});
 
 console.log(
   JSON.stringify({

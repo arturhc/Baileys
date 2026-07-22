@@ -23,7 +23,7 @@ pub mod storage_adapter;
 // Re-export WhatsApp protocol constants for JS usage
 use js_sys::Uint8Array;
 use serde::Serialize;
-use tsify_next::Tsify;
+use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 /// Returns the WhatsApp connection header (WA_CONN_HEADER).

@@ -28,7 +28,7 @@ impl SessionRecord {
 
         // 2. Standard Array (sometimes passed by generic serialization)
         if Array::is_array(&val) {
-            return Ok(SessionRecord::new(js_array_to_vec(&Array::from(&val))));
+            return Ok(SessionRecord::new(js_array_to_vec(&Array::from(&val))?));
         }
 
         // 3. Legacy libsignal-node JSON format (has "_sessions" key)
@@ -41,7 +41,7 @@ impl SessionRecord {
         if let Ok(data) = Reflect::get(&val, &JsValue::from_str(DATA_KEY))
             && Array::is_array(&data)
         {
-            return Ok(SessionRecord::new(js_array_to_vec(&Array::from(&data))));
+            return Ok(SessionRecord::new(js_array_to_vec(&Array::from(&data))?));
         }
 
         Err(JsValue::from_str(INVALID_INPUT_ERROR))
@@ -60,16 +60,30 @@ impl SessionRecord {
 }
 
 fn create_empty_session_record() -> Result<SessionRecord, JsValue> {
-    let empty_record =
-        CoreSessionRecord::deserialize(&[]).expect("Failed to create empty session record");
+    let empty_record = CoreSessionRecord::deserialize(&[])
+        .map_err(|e| JsValue::from_str(&format!("Failed to create empty session record: {e}")))?;
     let bytes = empty_record
         .serialize()
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     Ok(SessionRecord::new(bytes))
 }
 
-fn js_array_to_vec(array: &Array) -> Vec<u8> {
-    (0..array.length())
-        .filter_map(|i| array.get(i).as_f64().map(|n| n as u8))
-        .collect()
+pub(crate) fn js_array_to_vec(array: &Array) -> Result<Vec<u8>, JsValue> {
+    let mut bytes = Vec::with_capacity(array.length() as usize);
+
+    for index in 0..array.length() {
+        let value = array.get(index).as_f64().ok_or_else(|| {
+            JsValue::from_str(&format!("Invalid byte at index {index}: expected a number"))
+        })?;
+
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=255.0).contains(&value) {
+            return Err(JsValue::from_str(&format!(
+                "Invalid byte at index {index}: expected an integer between 0 and 255"
+            )));
+        }
+
+        bytes.push(value as u8);
+    }
+
+    Ok(bytes)
 }

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
-import { ProtocolAddress } from "../dist";
+import { describe, expect, it } from "@jest/globals";
+import { ProtocolAddress } from "../dist/index.js";
 
 describe("ProtocolAddress", () => {
   it("encodes and decodes correctly", () => {

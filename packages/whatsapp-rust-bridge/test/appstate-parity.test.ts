@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import {
   LTHashAntiTampering,
   expandAppStateKeys,
@@ -7,10 +7,10 @@ import {
   generatePatchMac,
   generateIndexMac,
   LTHashState,
-} from "../dist";
+} from "../dist/index.js";
 
-import { hkdf, hmacSign } from "baileys/lib/Utils/crypto";
-import { LT_HASH_ANTI_TAMPERING } from "baileys/lib/Utils/lt-hash";
+import { hkdf, hmacSign } from "baileys/lib/Utils/crypto.js";
+import { LT_HASH_ANTI_TAMPERING } from "baileys/lib/Utils/lt-hash.js";
 
 function toHex(buffer: Uint8Array | ArrayBuffer): string {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);

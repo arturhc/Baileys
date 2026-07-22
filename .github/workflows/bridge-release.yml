@@ -30,6 +30,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
         with:
@@ -40,10 +42,6 @@ jobs:
           node-version: 20.x
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
 
       - name: Install Rust toolchain
         run: rustup show
@@ -107,6 +105,9 @@ jobs:
       - name: Build from source
         run: pnpm build
 
+      - name: Test installed package, ESM/CommonJS, and WASM selection
+        run: pnpm test:package
+
       - name: Publish to npm
         run: npm publish --access public --provenance
         env:
@@ -130,7 +131,7 @@ jobs:
           cat dist.sha256
 
       - name: Open PR with updated checksum
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "chore(bridge): refresh dist.sha256 for ${{ github.ref_name }}"
           title: "chore(bridge): refresh dist.sha256 for ${{ github.ref_name }}"

@@ -1,10 +1,10 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import {
   ProtocolAddress,
   SessionCipher,
   generateIdentityKeyPair,
   generatePreKey,
-} from "../dist";
+} from "../dist/index.js";
 import { FakeStorage } from "./helpers/fake_storage";
 
 describe("Legacy Session Migration", () => {
@@ -16,6 +16,7 @@ describe("Legacy Session Migration", () => {
     // Generate valid keys for the legacy session
     const identity = generateIdentityKeyPair();
     const ephemeral = generatePreKey(1);
+    const sendingEphemeral = generatePreKey(2);
     const remoteIdentity = generateIdentityKeyPair();
     const rootKey = Buffer.alloc(32, 1);
     const chainKey = Buffer.alloc(32, 2);
@@ -55,8 +56,7 @@ describe("Legacy Session Migration", () => {
           messageKeys: {},
         },
         // A sending chain
-        [toB64(ephemeral.keyPair.pubKey)]: {
-          // Using same key for simplicity, usually different
+        [toB64(sendingEphemeral.keyPair.pubKey)]: {
           chainKey: {
             counter: 0,
             key: toB64(chainKey),

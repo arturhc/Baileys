@@ -15,6 +15,8 @@ export class FakeStorage {
 
   public ourIdentityKeyPair: KeyPair;
   public ourRegistrationId: number;
+  public identityLoadCount = 0;
+  public identitySaveCount = 0;
 
   constructor() {
     this.ourIdentityKeyPair = generateIdentityKeyPair();
@@ -48,17 +50,33 @@ export class FakeStorage {
   async isTrustedIdentity(
     identifier: string,
     identityKey: Uint8Array,
-    _direction?: number,
+    _direction?: number
   ): Promise<boolean> {
     const existing = this.identities.get(identifier);
-    if (!existing) {
-      this.identities.set(identifier, identityKey);
-      return true;
-    }
-    return Buffer.from(existing).equals(Buffer.from(identityKey));
+    return !existing || Buffer.from(existing).equals(Buffer.from(identityKey));
+  }
+  async loadIdentityKey(identifier: string): Promise<Uint8Array | undefined> {
+    this.identityLoadCount += 1;
+    const existing = this.identities.get(identifier);
+    return existing ? new Uint8Array(existing) : undefined;
+  }
+  async saveIdentity(
+    identifier: string,
+    identityKey: Uint8Array
+  ): Promise<boolean> {
+    this.identitySaveCount += 1;
+    const existing = this.identities.get(identifier);
+    const changed =
+      !existing || !Buffer.from(existing).equals(Buffer.from(identityKey));
+    this.identities.set(identifier, new Uint8Array(identityKey));
+    return changed;
   }
   trustIdentity(identifier: string, identityKey: Uint8Array): void {
-    this.identities.set(identifier, identityKey);
+    this.identities.set(identifier, new Uint8Array(identityKey));
+  }
+  getIdentity(identifier: string): Uint8Array | undefined {
+    const existing = this.identities.get(identifier);
+    return existing ? new Uint8Array(existing) : undefined;
   }
 
   async loadPreKey(id: number): Promise<KeyPair | undefined> {

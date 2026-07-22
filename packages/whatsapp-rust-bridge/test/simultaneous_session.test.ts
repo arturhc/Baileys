@@ -1,11 +1,11 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import {
   ProtocolAddress,
   SessionBuilder,
   SessionCipher,
   generateSignedPreKey,
   generatePreKey,
-} from "../dist";
+} from "../dist/index.js";
 import { FakeStorage } from "./helpers/fake_storage";
 
 describe("Simultaneous Session Initiation (Race Condition)", () => {

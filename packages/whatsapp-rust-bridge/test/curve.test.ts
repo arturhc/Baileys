@@ -1,11 +1,11 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import {
   generateKeyPair,
   calculateAgreement,
   calculateSignature,
   verifySignature,
   getPublicFromPrivateKey,
-} from "../dist";
+} from "../dist/index.js";
 
 const random32 = () =>
   Buffer.from(

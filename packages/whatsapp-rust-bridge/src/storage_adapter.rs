@@ -33,7 +33,7 @@ use wacore_libsignal::protocol::SignalProtocolError;
 use wacore_libsignal::protocol::Timestamp;
 use wacore_libsignal::store::sender_key_name::SenderKeyName as CoreSenderKeyName;
 
-use crate::session_record::SessionRecord;
+use crate::session_record::{SessionRecord, js_array_to_vec};
 
 #[wasm_bindgen(typescript_custom_section)]
 const TS_SIGNAL_STORAGE: &str = r#"
@@ -43,6 +43,8 @@ export interface SignalStorage {
     getOurIdentity(): KeyPair | Promise<KeyPair>;
     getOurRegistrationId(): number | Promise<number>;
     isTrustedIdentity(name: string, identityKey: Uint8Array, direction: number): boolean | Promise<boolean>;
+    loadIdentityKey?(name: string): Uint8Array | null | undefined | Promise<Uint8Array | null | undefined>;
+    saveIdentity?(name: string, identityKey: Uint8Array): boolean | Promise<boolean>;
     loadPreKey(id: number): KeyPair | null | undefined | Promise<KeyPair | null | undefined>;
     removePreKey(id: number): void | Promise<void>;
     loadSignedPreKey(id: number): SignedPreKey | null | undefined | Promise<SignedPreKey | null | undefined>;
@@ -86,6 +88,16 @@ extern "C" {
         name: &str,
         identity_key: &Uint8Array,
         direction: u32,
+    ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(structural, method, catch, js_name = loadIdentityKey)]
+    fn js_load_identity_key(this: &SignalStorage, name: &str) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(structural, method, catch, js_name = saveIdentity)]
+    fn js_save_identity(
+        this: &SignalStorage,
+        name: &str,
+        identity_key: &Uint8Array,
     ) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(structural, method, catch, js_name = loadPreKey)]
@@ -145,6 +157,42 @@ impl JsStorageAdapter {
             .unwrap_or(false);
         self.has_store_session_raw.borrow_mut().replace(has_raw);
         has_raw
+    }
+
+    fn has_js_method(&self, name: &str) -> bool {
+        js_sys::Reflect::get(&self.js_storage, &JsValue::from_str(name))
+            .map(|value| value.is_function())
+            .unwrap_or(false)
+    }
+
+    async fn load_peer_identity(&self, address: &str) -> SignalResult<Option<Vec<u8>>> {
+        if let Some(identity) = self.cached_identities.borrow().get(address) {
+            return Ok(Some(identity.clone()));
+        }
+
+        if !self.has_js_method("loadIdentityKey") {
+            return Ok(None);
+        }
+
+        let result = self
+            .js_storage
+            .js_load_identity_key(address)
+            .map_err(js_to_signal_error)?;
+        let Some(value) = resolve_maybe_promise_optional(result).await? else {
+            return Ok(None);
+        };
+        let identity = js_value_to_bytes(&value)?.ok_or_else(|| {
+            invalid_js_data(
+                "load_identity_key",
+                "Expected Uint8Array, Array, or Buffer-like object",
+            )
+        })?;
+
+        self.cached_identities
+            .borrow_mut()
+            .insert(address.to_string(), identity.clone());
+
+        Ok(Some(identity))
     }
 
     #[inline]
@@ -437,13 +485,13 @@ impl JsStorageAdapter {
                 .ok_or_else(|| invalid_js_data("migrate_sender_key", "Missing senderChainKey"))?;
             let iteration = get_number(&sender_chain_key_obj, "iteration").unwrap_or(0.0) as u32;
             let seed =
-                get_bytes_from_buffer_json(&sender_chain_key_obj, "seed").unwrap_or_default();
+                get_bytes_from_buffer_json(&sender_chain_key_obj, "seed")?.unwrap_or_default();
 
             let sender_signing_key_obj = get_object(&state_obj, "senderSigningKey")
                 .ok_or_else(|| invalid_js_data("migrate_sender_key", "Missing senderSigningKey"))?;
             let public_key =
-                get_bytes_from_buffer_json(&sender_signing_key_obj, "public").unwrap_or_default();
-            let private_key = get_bytes_from_buffer_json(&sender_signing_key_obj, "private");
+                get_bytes_from_buffer_json(&sender_signing_key_obj, "public")?.unwrap_or_default();
+            let private_key = get_bytes_from_buffer_json(&sender_signing_key_obj, "private")?;
 
             let sender_message_keys_arr = get_object(&state_obj, "senderMessageKeys")
                 .map(|v| js_sys::Array::from(&v))
@@ -453,7 +501,8 @@ impl JsStorageAdapter {
             for j in 0..sender_message_keys_arr.length() {
                 let msg_key_obj = sender_message_keys_arr.get(j);
                 let msg_iteration = get_number(&msg_key_obj, "iteration").unwrap_or(0.0) as u32;
-                let msg_seed = get_bytes_from_buffer_json(&msg_key_obj, "seed").unwrap_or_default();
+                let msg_seed =
+                    get_bytes_from_buffer_json(&msg_key_obj, "seed")?.unwrap_or_default();
 
                 sender_message_keys.push(SenderMessageKey {
                     iteration: Some(msg_iteration),
@@ -653,33 +702,27 @@ fn deserialize_js_value<T: DeserializeOwned>(
 }
 
 #[inline]
-fn js_array_to_bytes(array: &js_sys::Array) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(array.length() as usize);
-    for i in 0..array.length() {
-        if let Some(val) = array.get(i).as_f64() {
-            bytes.push(val as u8);
-        }
-    }
-    bytes
+fn js_array_to_bytes(array: &js_sys::Array) -> SignalResult<Vec<u8>> {
+    js_array_to_vec(array).map_err(js_to_signal_error)
 }
 
 #[inline]
-fn js_value_to_bytes(value: &JsValue) -> Option<Vec<u8>> {
+fn js_value_to_bytes(value: &JsValue) -> SignalResult<Option<Vec<u8>>> {
     if let Some(arr) = value.dyn_ref::<Uint8Array>() {
-        return Some(arr.to_vec());
+        return Ok(Some(arr.to_vec()));
     }
 
     if js_sys::Array::is_array(value) {
-        return Some(js_array_to_bytes(&js_sys::Array::from(value)));
+        return js_array_to_bytes(&js_sys::Array::from(value)).map(Some);
     }
 
     if let Ok(data) = js_sys::Reflect::get(value, &JsValue::from_str("data"))
         && js_sys::Array::is_array(&data)
     {
-        return Some(js_array_to_bytes(&js_sys::Array::from(&data)));
+        return js_array_to_bytes(&js_sys::Array::from(&data)).map(Some);
     }
 
-    None
+    Ok(None)
 }
 
 fn is_legacy_session_object(value: &JsValue) -> bool {
@@ -709,10 +752,12 @@ fn get_number(obj: &JsValue, key: &str) -> Option<f64> {
         .and_then(|v| v.as_f64())
 }
 
-fn get_bytes_from_buffer_json(obj: &JsValue, key: &str) -> Option<Vec<u8>> {
-    let val = js_sys::Reflect::get(obj, &JsValue::from_str(key)).ok()?;
+fn get_bytes_from_buffer_json(obj: &JsValue, key: &str) -> SignalResult<Option<Vec<u8>>> {
+    let Ok(val) = js_sys::Reflect::get(obj, &JsValue::from_str(key)) else {
+        return Ok(None);
+    };
     if val.is_undefined() || val.is_null() {
-        return None;
+        return Ok(None);
     }
 
     // Check for Buffer-like object { type: "Buffer", data: [...] }
@@ -722,22 +767,23 @@ fn get_bytes_from_buffer_json(obj: &JsValue, key: &str) -> Option<Vec<u8>> {
         && t.as_string().as_deref() == Some("Buffer")
         && js_sys::Array::is_array(&d)
     {
-        return Some(js_array_to_bytes(&js_sys::Array::from(&d)));
+        return js_array_to_bytes(&js_sys::Array::from(&d)).map(Some);
     }
 
     // Try Uint8Array
     if let Some(arr) = val.dyn_ref::<Uint8Array>() {
-        return Some(arr.to_vec());
+        return Ok(Some(arr.to_vec()));
     }
 
     // Try plain JS array
     if js_sys::Array::is_array(&val) {
-        return Some(js_array_to_bytes(&js_sys::Array::from(&val)));
+        return js_array_to_bytes(&js_sys::Array::from(&val)).map(Some);
     }
 
     // Try base64 string
-    val.as_string()
-        .and_then(|s| BASE64_STANDARD.decode(&s).ok())
+    Ok(val
+        .as_string()
+        .and_then(|s| BASE64_STANDARD.decode(&s).ok()))
 }
 
 #[async_trait(?Send)]
@@ -764,7 +810,7 @@ impl SessionStore for JsStorageAdapter {
             return Ok(None);
         }
 
-        let bytes = if let Some(b) = js_value_to_bytes(&value) {
+        let bytes = if let Some(b) = js_value_to_bytes(&value)? {
             Some(b)
         } else if is_legacy_session_object(&value) {
             self.migrate_legacy_json(value).await?
@@ -799,10 +845,6 @@ impl SessionStore for JsStorageAdapter {
 
         let bytes = record.serialize()?;
 
-        self.cached_sessions
-            .borrow_mut()
-            .insert(address_str.clone(), record);
-
         let result = if self.has_store_session_raw() {
             let uint8 = Uint8Array::from(bytes.as_slice());
             self.js_storage.js_store_session_raw(&address_str, &uint8)
@@ -816,6 +858,10 @@ impl SessionStore for JsStorageAdapter {
         resolve_maybe_promise(promise_value)
             .await
             .map_err(js_to_signal_error)?;
+
+        self.cached_sessions
+            .borrow_mut()
+            .insert(address_str, record);
 
         Ok(())
     }
@@ -908,12 +954,6 @@ impl IdentityKeyStore for JsStorageAdapter {
 
         let trusted = value.as_bool().unwrap_or(false);
 
-        if trusted {
-            self.cached_identities
-                .borrow_mut()
-                .insert(address_name, identity_bytes.to_vec());
-        }
-
         Ok(trusted)
     }
 
@@ -925,11 +965,21 @@ impl IdentityKeyStore for JsStorageAdapter {
         let address_name = address.name().to_string();
         let identity_bytes = identity.serialize();
 
-        let changed = if let Some(cached_key) = self.cached_identities.borrow().get(&address_name) {
-            cached_key.as_slice() != identity_bytes.as_slice()
-        } else {
-            false
-        };
+        let previous_identity = self.load_peer_identity(&address_name).await?;
+        let changed = previous_identity
+            .as_deref()
+            .is_some_and(|stored| stored != identity_bytes.as_slice());
+
+        if self.has_js_method("saveIdentity") {
+            let uint8 = Uint8Array::from(identity_bytes.as_slice());
+            let result = self
+                .js_storage
+                .js_save_identity(&address_name, &uint8)
+                .map_err(js_to_signal_error)?;
+            resolve_maybe_promise(result)
+                .await
+                .map_err(js_to_signal_error)?;
+        }
 
         self.cached_identities
             .borrow_mut()
@@ -940,9 +990,13 @@ impl IdentityKeyStore for JsStorageAdapter {
 
     async fn get_identity(
         &self,
-        _address: &libsignal::ProtocolAddress,
+        address: &libsignal::ProtocolAddress,
     ) -> SignalResult<Option<libsignal::IdentityKey>> {
-        Ok(None)
+        let address_name = address.name().to_string();
+        self.load_peer_identity(&address_name)
+            .await?
+            .map(|identity| libsignal::IdentityKey::decode(&identity))
+            .transpose()
     }
 }
 
@@ -1033,7 +1087,7 @@ impl SenderKeyStore for JsStorageAdapter {
             return Ok(None);
         }
 
-        let bytes = js_value_to_bytes(&value);
+        let bytes = js_value_to_bytes(&value)?;
 
         let Some(data) = bytes else {
             return Ok(None);
@@ -1068,10 +1122,6 @@ impl SenderKeyStore for JsStorageAdapter {
         let key_id = self.get_sender_key_id(sender_key_name);
 
         let bytes = record.serialize()?;
-
-        self.cached_sender_keys
-            .borrow_mut()
-            .insert(key_id.clone(), record);
         let uint8 = Uint8Array::from(bytes.as_slice());
 
         let result = self
@@ -1081,6 +1131,8 @@ impl SenderKeyStore for JsStorageAdapter {
         resolve_maybe_promise(result)
             .await
             .map_err(js_to_signal_error)?;
+
+        self.cached_sender_keys.borrow_mut().insert(key_id, record);
 
         Ok(())
     }

@@ -1,30 +1,30 @@
-import { describe, it, expect, mock } from "bun:test";
+import { describe, it, expect, jest } from "@jest/globals";
 import {
   setLogger,
   hasLogger,
   updateLogger,
   logMessage,
   type ILogger,
-} from "../dist";
+} from "../dist/index.js";
 
 function createMockLogger(level: string = "debug") {
   const calls: { method: string; obj: object; msg?: string }[] = [];
 
   const logger: ILogger = {
     level,
-    trace: mock((obj: object, msg?: string) => {
+    trace: jest.fn((obj: object, msg?: string) => {
       calls.push({ method: "trace", obj, msg });
     }),
-    debug: mock((obj: object, msg?: string) => {
+    debug: jest.fn((obj: object, msg?: string) => {
       calls.push({ method: "debug", obj, msg });
     }),
-    info: mock((obj: object, msg?: string) => {
+    info: jest.fn((obj: object, msg?: string) => {
       calls.push({ method: "info", obj, msg });
     }),
-    warn: mock((obj: object, msg?: string) => {
+    warn: jest.fn((obj: object, msg?: string) => {
       calls.push({ method: "warn", obj, msg });
     }),
-    error: mock((obj: object, msg?: string) => {
+    error: jest.fn((obj: object, msg?: string) => {
       calls.push({ method: "error", obj, msg });
     }),
   };
@@ -33,7 +33,9 @@ function createMockLogger(level: string = "debug") {
 }
 
 describe("logger bridge", () => {
-  it("should initially have no logger set", () => {});
+  it("should initially have no logger set", () => {
+    expect(hasLogger()).toBe(false);
+  });
 
   it("should set and detect logger", () => {
     const { logger } = createMockLogger();

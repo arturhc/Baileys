@@ -1,9 +1,9 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "@jest/globals";
 import {
   encodeBinaryNode,
   decodeBinaryNode as legacyDecodeNode,
 } from "baileys";
-import { decodeNode, encodeNode, type BinaryNode } from "../dist";
+import { decodeNode, encodeNode, type BinaryNode } from "../dist/index.js";
 
 function hex(buffer: Uint8Array): string {
   return Buffer.from(buffer).toString("hex");
@@ -303,7 +303,7 @@ describe("Server Response Decoding Parity", () => {
     expect(wasmContent[0].attrs.count).toBe(legacyContent[0].attrs.count);
   });
 
-  it("should decode encrypted message identically - BROKEN: HEX_8 SIMD bug", async () => {
+  it("should decode encrypted messages identically", async () => {
     const serverResponse: BinaryNode = {
       tag: "message",
       attrs: {
@@ -354,7 +354,7 @@ describe("Server Response Decoding Parity", () => {
     expect(wasmEnc?.attrs.type).toBe(legacyEnc?.attrs.type);
   });
 
-  it("should demonstrate HEX_8 SIMD decoding bug", async () => {
+  it("should preserve HEX_8 message IDs", async () => {
     const node: BinaryNode = {
       tag: "test",
       attrs: {
@@ -365,10 +365,6 @@ describe("Server Response Decoding Parity", () => {
     const encoded = encodeBinaryNode(node);
     const wasmDecoded = decodeNode(new Uint8Array(encoded));
     const legacyDecoded = await legacyDecodeNode(Buffer.from(encoded));
-
-    console.log("Original ID:", node.attrs.id);
-    console.log("Legacy decoded ID:", legacyDecoded.attrs.id);
-    console.log("WASM decoded ID:", wasmDecoded.attrs.id);
 
     expect(wasmDecoded.attrs.id).toBe(legacyDecoded.attrs.id);
     expect(wasmDecoded.attrs.id).toBe("A14AFA49C4D9AEDA69F01ADDF2289D71");

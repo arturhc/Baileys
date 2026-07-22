@@ -3,7 +3,7 @@ use js_sys::Uint8Array;
 use md5::Md5;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tsify_next::Tsify;
+use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = md5)]

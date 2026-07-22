@@ -7,15 +7,15 @@ Quick orientation: this package is a Rust → WebAssembly bridge that provides b
 Core summary
 
 - Rust WASM core (`src/`) exposes functions (via `wasm_bindgen`) consumed in JS/TS.
-- TypeScript wrapper (`ts/index.ts`, `ts/macro.ts`) bundles wasm inline (base64) and exposes the `dist/` exports.
-- Tests are in `test/` (Bun) and benches in `benches/` (Mitata).
-- A fresh monorepo `pnpm install` does **not** rebuild the WASM. Instead, `scripts/fetch-prebuilt.mjs` runs as the package's `postinstall` and pulls the published tarball straight from npm, so contributors who don't touch Rust never need `cargo`/`wasm-pack`/`wasm-opt`/`bun`. Set `WHATSAPP_RUST_BRIDGE_SKIP_PREBUILT=1` to opt out and use your local build instead.
+- TypeScript wrappers provide native Node ESM and CommonJS entry points that load one external SIMD or non-SIMD WASM asset from `dist/wasm/`.
+- Tests are in `test/` (Jest) and benches in `benches/` (Mitata on Node via tsx).
+- A fresh monorepo `pnpm install` does **not** rebuild the WASM. Instead, `scripts/fetch-prebuilt.mjs` runs as the package's `postinstall` and pulls the published tarball straight from npm, so contributors who don't touch Rust never need `cargo`/`wasm-pack`/`wasm-opt`. Set `WHATSAPP_RUST_BRIDGE_SKIP_PREBUILT=1` to opt out and use your local build instead.
 
 Key files to review
 
-- `src/wasm_api.rs` — JS ↔ Rust conversions, zero-copy decoding, caching, wasm exports (`encode_node`/`decode_node`).
-- `src/key_helper_api.rs` — LibSignal helpers and key generation exposed to JS.
-- `ts/binary.ts` + `ts/macro.ts` — WASM initialization and build-time embedding for runtime/CI.
+- `src/binary.rs` — JS ↔ Rust conversions and wasm exports (`encode_node`/`decode_node`).
+- `src/key_helper.rs` — LibSignal helpers and key generation exposed to JS.
+- `ts/index.ts`, `ts/index.cjs.ts`, and `scripts/build-{wasm,ts}.mjs` — Node WASM initialization and ESM/CommonJS packaging for runtime/CI.
 - `test/` — Rigorous round-trip tests that illustrate supported content/attr conventions.
 
 Important patterns (do not deviate without a PR note)
@@ -28,10 +28,10 @@ Important patterns (do not deviate without a PR note)
 Build, test & release flow
 
 - Local dev build (WASM + TS):
-  - `bun run build` — runs `wasm-pack build` then TypeScript bundling; produces `pkg/` and `dist/`.
-  - `bun test` — run unit tests in `test/`. (always remember to run `bun run build` first to ensure latest changes are tested)
-  - `bun run bench` — build + run benches in `benches/`.
-- Ensure you have `wasm-pack`, `bun`, and `wasm-opt` available when building.
+  - `pnpm build` — runs `wasm-pack build` then TypeScript bundling; produces `pkg/` and `dist/`.
+  - `pnpm test` — run unit tests in `test/`. (always remember to run `pnpm build` first to ensure latest changes are tested)
+  - `pnpm bench` — build + run benches in `benches/`.
+- Ensure you have `wasm-pack` and `wasm-opt` available when building.
 
 Conventions & examples
 
@@ -101,13 +101,13 @@ class WasmNode {
 
 ### Primary Commands
 
-- **Full build**: `bun run build` (WASM + TS bundle + declarations)
-- **Test**: `bun test` (runs `test/binary.test.ts`)
-- **Benchmark**: `bun run bench` (builds then runs `benches/binary.ts`)
+- **Full build**: `pnpm build` (WASM + TS bundle + declarations)
+- **Test**: `pnpm test` (runs Jest tests in `test/`)
+- **Benchmark**: `pnpm bench` (builds then runs the Mitata benchmarks through Node/tsx)
 
 ### Testing Patterns
 
-- Use Bun's test runner (`bun:test`)
+- Use Jest through `@jest/globals`
 - Round-trip testing: encode → decode → compare
 - Content type verification: string vs binary handling
 - Error case testing: truncated data, invalid inputs
@@ -169,7 +169,7 @@ let handle = WasmNode { _owned_data, node_ref };
 ## Dependencies & Tooling
 
 - Declaration generation requires specific TypeScript config (`emitDeclarationOnly: true`)
-- **Testing**: Bun test runner
+- **Testing**: Jest on Node
 - **Benchmarking**: Mitata
 - **WASM**: wasm-pack + wasm-bindgen
 - **Rust**: 2024 edition, custom allocator
