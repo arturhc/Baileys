@@ -1,3 +1,30 @@
+## [6.7.24](https://github.com/WhiskeySockets/Baileys/compare/v6.7.23...v6.7.24) (2026-07-29)
+
+
+### Reverts
+
+* Revert "chore(release): v6.7.24" ([c7a17f5](https://github.com/WhiskeySockets/Baileys/commit/c7a17f553ce20217c92eac830a663553453c9680))
+
+
+
+## [6.7.23](https://github.com/WhiskeySockets/Baileys/compare/v6.7.22...v6.7.23) (2026-05-21)
+
+
+### Bug Fixes
+
+* **decode:** match sender against both PN and LID identities ([58932e7](https://github.com/WhiskeySockets/Baileys/commit/58932e72b82b455ae730a0b32beaadf48353a5d5))
+
+
+
+## [6.7.22](https://github.com/WhiskeySockets/Baileys/compare/v6.7.21...v6.7.22) (2026-05-20)
+
+
+### Bug Fixes
+
+* **process-message:** only drop self-only protocolMessages from non-self senders ([fcf9b7c](https://github.com/WhiskeySockets/Baileys/commit/fcf9b7cef4ac2a05c0d7de3acabb670517934f66)), closes [/github.com/tulir/whatsmeow/blob/8d3700152a/message.go#L842-L845](https://github.com//github.com/tulir/whatsmeow/blob/8d3700152a/message.go/issues/L842-L845)
+
+
+
 ## [6.7.21](https://github.com/WhiskeySockets/Baileys/compare/v6.7.20...v6.7.21) (2025-11-06)
 
 
