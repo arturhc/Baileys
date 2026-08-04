@@ -101,8 +101,11 @@ describe('decryptMessage duplicate handling', () => {
 		const decrypted = await bob.repository.decryptMessage({ jid: aliceJid, type, ciphertext })
 		expect(Buffer.from(decrypted)).toEqual(plaintext)
 
-		// Bad path: the very same ciphertext arrives again.
-		await expect(bob.repository.decryptMessage({ jid: aliceJid, type, ciphertext })).rejects.toThrow(
+		// Bad path: the very same ciphertext arrives again. messages-recv compares
+		// the stub parameter with `===`, so a prefix/suffix would break the 487 ACK
+		// while still satisfying toThrow's substring match — assert exact equality.
+		await expect(bob.repository.decryptMessage({ jid: aliceJid, type, ciphertext })).rejects.toHaveProperty(
+			'message',
 			MISSING_KEYS_ERROR_TEXT
 		)
 	})

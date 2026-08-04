@@ -22,7 +22,7 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 
 		expect(result).toHaveLength(1)
 		expect(result[0]!.device).toBe(99)
-		// Must be HOSTED (1), not WHATSAPP (0)
+		// Must be HOSTED (128), not WHATSAPP (0)
 		expect(result[0]!.domainType).toBe(WAJIDDomains.HOSTED)
 		expect(result[0]!.server).toBe('hosted')
 	})

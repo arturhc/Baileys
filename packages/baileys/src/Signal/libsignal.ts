@@ -91,6 +91,23 @@ function normalizeDecryptError(error: unknown): unknown {
 	return error
 }
 
+/** Does a stored session row — bridge bytes or a pre-WASM record — hold a live state? */
+function hasOpenSession(stored: Uint8Array | undefined): boolean {
+	if (!stored) {
+		return false
+	}
+
+	if (isLegacySessionRecord(stored)) {
+		return hasOpenLegacySession(stored)
+	}
+
+	try {
+		return SessionRecord.deserialize(stored).haveOpenSession()
+	} catch {
+		return false
+	}
+}
+
 /** Extract identity key from PreKeyWhisperMessage for identity change detection */
 function extractIdentityFromPkmsg(ciphertext: Uint8Array): Uint8Array | undefined {
 	try {
@@ -532,6 +549,10 @@ export function makeLibSignalRepository(
 					// Bulk fetch PN sessions - already exist (verified during device discovery)
 					const pnAddrStrings = Array.from(new Set(migrationOps.map(op => op.fromAddr.toString())))
 					const pnSessions = await parsedKeys.get('session', pnAddrStrings)
+					// Destination rows, needed to avoid overwriting a live LID session
+					// with a legacy PN one. Both sides are already inside the lock scope.
+					const lidAddrStrings = Array.from(new Set(migrationOps.map(op => op.toAddr.toString())))
+					const lidSessions = await parsedKeys.get('session', lidAddrStrings)
 
 					// Prepare bulk session updates (PN → LID migration + deletion)
 					const sessionUpdates: { [key: string]: Uint8Array | null } = {}
@@ -549,7 +570,12 @@ export function makeLibSignalRepository(
 							// record across verbatim and let the storage adapter migrate it on
 							// first use, under the key it will actually be read from.
 							if (isLegacySessionRecord(pnSession)) {
-								if (hasOpenLegacySession(pnSession)) {
+								// A session established after the upgrade already lives on the
+								// LID key and is newer than anything the legacy PN record
+								// holds, so it wins. Before this branch existed the legacy
+								// record was silently skipped, which preserved it by accident;
+								// now that the copy is real the check has to be explicit.
+								if (hasOpenLegacySession(pnSession) && !hasOpenSession(lidSessions[lidAddrStr])) {
 									sessionUpdates[lidAddrStr] = pnSession as unknown as Uint8Array
 									sessionUpdates[pnAddrStr] = null
 
@@ -651,9 +677,15 @@ function signalStorage(
 				// Pre-WASM auth states hold the JS libsignal object. Hand the bridge
 				// the OPEN state rather than letting it take `_sessions`' first key,
 				// which after a rotation is a closed one. See ./legacy-session.
+				//
+				// With every state closed there is nothing safe to hand over: passing
+				// the record would let the bridge promote a closed state to the
+				// current session, and encrypting under a ratchet the peer already
+				// dropped yields messages nobody can decrypt. Report "no session" so
+				// the session is renegotiated instead.
 				if (isLegacySessionRecord(sess)) {
 					const open = pickOpenLegacySession(sess)
-					return (open ?? sess) as unknown as Uint8Array
+					return open ? (open as unknown as Uint8Array) : null
 				}
 
 				return sess

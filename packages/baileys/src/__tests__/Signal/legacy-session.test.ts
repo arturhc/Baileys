@@ -187,6 +187,38 @@ describe('repository on a pre-WASM auth state', () => {
 		expect(hasOpenLegacySession(moved as never)).toBe(true)
 	})
 
+	it('does not resurrect a fully-closed legacy record as a usable session', async () => {
+		const closedOnly = {
+			_sessions: { [b64(9)]: legacyEntry({ closed: 1700000000000, registrationId: 111, baseKeyFill: 9 }) }
+		}
+		const { repository } = makeRepository({ session: { [addr]: closedOnly } })
+
+		// Handing the record over would let the bridge promote the closed state to
+		// current and encrypt under a ratchet the peer already dropped.
+		await expect(repository.getSessionInfo(pnJid)).resolves.toBeNull()
+		await expect(repository.validateSession(pnJid)).resolves.toEqual({ exists: false, reason: 'no session' })
+	})
+
+	it('keeps a live LID session instead of overwriting it with a legacy PN one', async () => {
+		const lidJid = '18000000000001@lid'
+		const lidAddr = '18000000000001_1.0'
+		const liveLid = {
+			_sessions: { [b64(7)]: legacyEntry({ closed: -1, registrationId: 333, baseKeyFill: 7 }) }
+		}
+		const { repository, data } = makeRepository({
+			'device-list': { '5511900000001': ['0'] },
+			session: { [addr]: rotatedLegacyRecord(), [lidAddr]: liveLid }
+		})
+
+		const result = await repository.migrateSession(pnJid, lidJid)
+
+		expect(result.migrated).toBe(0)
+		// The post-upgrade LID session is newer and must survive untouched.
+		expect(pickOpenLegacySession(data.session![lidAddr] as never)?.registrationId).toBe(333)
+		// ...and the PN row is not cleared, since nothing was moved.
+		expect(data.session![addr]).toBeDefined()
+	})
+
 	it('does not migrate a legacy record whose states are all closed', async () => {
 		const lidJid = '18000000000001@lid'
 		const closedOnly = {
