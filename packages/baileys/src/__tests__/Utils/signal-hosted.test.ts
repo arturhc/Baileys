@@ -1,5 +1,6 @@
 import { extractDeviceJids } from '../../Utils/signal'
 import { WAJIDDomains } from '../../WABinary'
+import type { USyncQueryResultList } from '../../WAUSync'
 
 describe('extractDeviceJids Hosted Device Logic', () => {
 	const myJid = '11111111111@s.whatsapp.net'
@@ -8,7 +9,7 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 	it('should correctly convert PN user with device 99 to @hosted domain', () => {
 		const targetUser = '33333333333@s.whatsapp.net'
 		// Mock a USync result where isHosted is MISSING/false for device 99
-		const mockResult = [
+		const mockResult: USyncQueryResultList[] = [
 			{
 				id: targetUser,
 				devices: {
@@ -17,7 +18,7 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 			}
 		]
 
-		const result = extractDeviceJids(mockResult as any, myJid, myLid, false)
+		const result = extractDeviceJids(mockResult, myJid, myLid, false)
 
 		expect(result).toHaveLength(1)
 		expect(result[0]!.device).toBe(99)
@@ -28,7 +29,7 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 
 	it('should correctly convert LID user with device 99 to @hosted.lid domain', () => {
 		const targetUser = '44444444444@lid'
-		const mockResult = [
+		const mockResult: USyncQueryResultList[] = [
 			{
 				id: targetUser,
 				devices: {
@@ -37,7 +38,7 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 			}
 		]
 
-		const result = extractDeviceJids(mockResult as any, myJid, myLid, false)
+		const result = extractDeviceJids(mockResult, myJid, myLid, false)
 
 		expect(result).toHaveLength(1)
 		expect(result[0]!.device).toBe(99)
@@ -48,7 +49,7 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 
 	it('should respect explicit isHosted flag for non-99 devices', () => {
 		const targetUser = '55555555555@s.whatsapp.net'
-		const mockResult = [
+		const mockResult: USyncQueryResultList[] = [
 			{
 				id: targetUser,
 				devices: {
@@ -57,7 +58,7 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 			}
 		]
 
-		const result = extractDeviceJids(mockResult as any, myJid, myLid, false)
+		const result = extractDeviceJids(mockResult, myJid, myLid, false)
 
 		expect(result).toHaveLength(1)
 		expect(result[0]!.device).toBe(33)
@@ -67,7 +68,7 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 
 	it('should NOT force hosted domain for non-99 devices without isHosted flag', () => {
 		const targetUser = '66666666666@s.whatsapp.net'
-		const mockResult = [
+		const mockResult: USyncQueryResultList[] = [
 			{
 				id: targetUser,
 				devices: {
@@ -76,7 +77,7 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 			}
 		]
 
-		const result = extractDeviceJids(mockResult as any, myJid, myLid, false)
+		const result = extractDeviceJids(mockResult, myJid, myLid, false)
 
 		expect(result).toHaveLength(1)
 		expect(result[0]!.device).toBe(33)
@@ -87,7 +88,7 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 
 	it('should handle device 99 with explicit isHosted=true (redundant but safe)', () => {
 		const targetUser = '77777777777@lid'
-		const mockResult = [
+		const mockResult: USyncQueryResultList[] = [
 			{
 				id: targetUser,
 				devices: {
@@ -96,11 +97,36 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 			}
 		]
 
-		const result = extractDeviceJids(mockResult as any, myJid, myLid, false)
+		const result = extractDeviceJids(mockResult, myJid, myLid, false)
 
 		expect(result).toHaveLength(1)
 		expect(result[0]!.device).toBe(99)
 		expect(result[0]!.domainType).toBe(WAJIDDomains.HOSTED_LID)
 		expect(result[0]!.server).toBe('hosted.lid')
+	})
+
+	it('should not let a hosted device rewrite the domain of later devices in the same list', () => {
+		const targetUser = '88888888888@s.whatsapp.net'
+		const mockResult: USyncQueryResultList[] = [
+			{
+				id: targetUser,
+				devices: {
+					deviceList: [
+						{ id: 99, keyIndex: 1, isHosted: true },
+						{ id: 1, keyIndex: 2, isHosted: false }
+					]
+				}
+			}
+		]
+
+		const result = extractDeviceJids(mockResult, myJid, myLid, false)
+
+		expect(result).toHaveLength(2)
+		expect(result[0]!.domainType).toBe(WAJIDDomains.HOSTED)
+		expect(result[0]!.server).toBe('hosted')
+		// The non-hosted device that follows must keep the user's own domain.
+		expect(result[1]!.device).toBe(1)
+		expect(result[1]!.domainType).toBe(WAJIDDomains.WHATSAPP)
+		expect(result[1]!.server).toBe('s.whatsapp.net')
 	})
 })

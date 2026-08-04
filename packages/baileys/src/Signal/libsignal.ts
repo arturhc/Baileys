@@ -127,7 +127,7 @@ export function makeLibSignalRepository(
 	// call sites don't have to null-check the (publicly optional) method.
 	const parsedKeys = auth.keys as SignalKeyStoreWithRecordTransaction
 	const migratedSessionCache = new LRUCache<string, true>({
-		ttl: 3 * 24 * 60 * 60 * 1000, // 7 days
+		ttl: 3 * 24 * 60 * 60 * 1000, // 3 days
 		ttlAutopurge: true,
 		updateAgeOnGet: true
 	})
@@ -159,8 +159,12 @@ export function makeLibSignalRepository(
 				throw new Error('Group ID is required for sender key distribution message')
 			}
 
+			if (!item.axolotlSenderKeyDistributionMessage) {
+				throw new Error('Sender key distribution message is required')
+			}
+
 			const senderName = jidToSignalSenderKeyName(item.groupId, authorJid)
-			const senderMsg = SenderKeyDistributionMessage.deserialize(item.axolotlSenderKeyDistributionMessage!)
+			const senderMsg = SenderKeyDistributionMessage.deserialize(item.axolotlSenderKeyDistributionMessage)
 			const senderNameStr = senderName.toString()
 
 			// The "ensure a SenderKeyRecord exists" check runs INSIDE the

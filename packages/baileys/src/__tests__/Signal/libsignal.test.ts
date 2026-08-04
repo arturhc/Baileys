@@ -26,10 +26,12 @@ describe('jidToSignalProtocolAddress', () => {
 		keys: {
 			get: async () => ({}),
 			set: async () => {},
-			transaction: async (work: any) => await work(),
+			transaction: async <T>(work: () => Promise<T>) => await work(),
 			isInTransaction: () => false
 		}
-	} as any
+		// Only the address helpers are exercised here, so the store side is a stub
+		// rather than a full SignalKeyStoreWithTransaction.
+	} as unknown as SignalAuthState
 
 	const repository = makeLibSignalRepository(mockAuth, logger)
 
