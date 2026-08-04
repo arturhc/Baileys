@@ -27,8 +27,10 @@ export const Curve = {
 	sign: (privateKey: Uint8Array, buf: Uint8Array) => calculateSignature(privateKey, buf),
 	verify: (pubKey: Uint8Array, message: Uint8Array, signature: Uint8Array) => {
 		try {
-			verifySignature(generateSignalPubKey(pubKey), message, signature)
-			return true
+			// The bridge reports a well-formed but invalid signature by returning
+			// false, and only throws on malformed input — so the result has to be
+			// returned, not just the absence of a throw.
+			return verifySignature(generateSignalPubKey(pubKey), message, signature)
 		} catch (error) {
 			return false
 		}

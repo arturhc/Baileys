@@ -1,3 +1,4 @@
+import { Boom } from '@hapi/boom'
 import { LRUCache } from 'lru-cache'
 import type { SignalStorage } from 'whatsapp-rust-bridge'
 import {
@@ -22,6 +23,7 @@ import type {
 	SignalKeyStoreWithTransaction
 } from '../Types'
 import type { SignalRepositoryWithLIDStore } from '../Types/Signal'
+import { MISSING_KEYS_ERROR_TEXT } from '../Utils/decode-wa-message'
 import type { ILogger } from '../Utils/logger'
 import {
 	isHostedLidUser,
@@ -32,6 +34,13 @@ import {
 	transferDevice,
 	WAJIDDomains
 } from '../WABinary'
+import {
+	hasOpenLegacySession,
+	isLegacySessionEntry,
+	isLegacySessionRecord,
+	legacySessionInfo,
+	pickOpenLegacySession
+} from './legacy-session'
 import { LIDMappingStore } from './lid-mapping'
 
 /**
@@ -63,6 +72,23 @@ async function resolveSignalAddressId(id: string, lidMapping: LIDMappingStore): 
 	}
 
 	return id
+}
+
+/**
+ * The JS libsignal reported an already-consumed message key as
+ * `MISSING_KEYS_ERROR_TEXT`, which the receive path matches to ACK the stanza
+ * (487) instead of asking the peer to resend. The bridge rejects the same case
+ * with a Debug-formatted `DuplicatedMessage(chain, counter)` — and throws plain
+ * strings, not Errors — so map it back onto the text messages-recv understands.
+ * Without this a redelivered ciphertext drives a pointless retry/resend loop.
+ */
+function normalizeDecryptError(error: unknown): unknown {
+	const message = typeof error === 'string' ? error : error instanceof Error ? error.message : ''
+	if (message.includes('DuplicatedMessage')) {
+		return new Boom(MISSING_KEYS_ERROR_TEXT, { data: { cause: message } })
+	}
+
+	return error
 }
 
 /** Extract identity key from PreKeyWhisperMessage for identity change detection */
@@ -214,13 +240,17 @@ export function makeLibSignalRepository(
 
 			async function doDecrypt() {
 				let result: Uint8Array
-				switch (type) {
-					case 'pkmsg':
-						result = await session.decryptPreKeyWhisperMessage(ciphertext)
-						break
-					case 'msg':
-						result = await session.decryptWhisperMessage(ciphertext)
-						break
+				try {
+					switch (type) {
+						case 'pkmsg':
+							result = await session.decryptPreKeyWhisperMessage(ciphertext)
+							break
+						case 'msg':
+							result = await session.decryptWhisperMessage(ciphertext)
+							break
+					}
+				} catch (error) {
+					throw normalizeDecryptError(error)
 				}
 
 				return result
@@ -287,6 +317,13 @@ export function makeLibSignalRepository(
 				return null
 			}
 
+			// A not-yet-converted session arrives as the JS libsignal state, which
+			// carries these fields directly — read them so the retry protections
+			// also cover sessions that predate the bridge format.
+			if (isLegacySessionEntry(serialized)) {
+				return legacySessionInfo(serialized)
+			}
+
 			// `storage.loadSession` hands the bridge the raw persisted record, and
 			// `SessionRecord` only exposes `haveOpenSession`/`serialize` — no accessor
 			// for the open state's fields. Decode the record here instead: it is the
@@ -335,6 +372,12 @@ export function makeLibSignalRepository(
 
 				if (!serialized) {
 					return { exists: false, reason: 'no session' }
+				}
+
+				// `loadSession` only yields a legacy entry when it found an OPEN one,
+				// and SessionRecord.deserialize would reject the object outright.
+				if (isLegacySessionEntry(serialized)) {
+					return { exists: true }
 				}
 
 				if (!SessionRecord.deserialize(serialized).haveOpenSession()) {
@@ -499,6 +542,23 @@ export function makeLibSignalRepository(
 
 						const pnSession = pnSessions[pnAddrStr]
 						if (pnSession) {
+							// A pre-WASM auth state still holds the JS libsignal object here.
+							// Round-tripping it through SessionRecord.deserialize would flatten
+							// it to an EMPTY record, so the copy would be skipped and the PN
+							// session left stranded behind the now-LID-keyed lookup. Move the
+							// record across verbatim and let the storage adapter migrate it on
+							// first use, under the key it will actually be read from.
+							if (isLegacySessionRecord(pnSession)) {
+								if (hasOpenLegacySession(pnSession)) {
+									sessionUpdates[lidAddrStr] = pnSession as unknown as Uint8Array
+									sessionUpdates[pnAddrStr] = null
+
+									migratedCount++
+								}
+
+								continue
+							}
+
 							// Session exists (guaranteed from device discovery)
 							const fromSession = SessionRecord.deserialize(pnSession)
 							if (fromSession.haveOpenSession()) {
@@ -584,8 +644,19 @@ function signalStorage(
 			try {
 				const wireJid = await resolveLIDSignalAddress(id)
 				const { [wireJid]: sess } = await keys.get('session', [wireJid])
+				if (!sess) {
+					return null
+				}
 
-				return sess ?? null
+				// Pre-WASM auth states hold the JS libsignal object. Hand the bridge
+				// the OPEN state rather than letting it take `_sessions`' first key,
+				// which after a rotation is a closed one. See ./legacy-session.
+				if (isLegacySessionRecord(sess)) {
+					const open = pickOpenLegacySession(sess)
+					return (open ?? sess) as unknown as Uint8Array
+				}
+
+				return sess
 			} catch (e) {
 				return null
 			}

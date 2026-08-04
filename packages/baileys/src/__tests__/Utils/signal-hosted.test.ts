@@ -105,6 +105,26 @@ describe('extractDeviceJids Hosted Device Logic', () => {
 		expect(result[0]!.server).toBe('hosted.lid')
 	})
 
+	it('should keep an already-hosted LID user on the LID side for device 99', () => {
+		// jidDecode already yields HOSTED_LID here, so the device-99 rule must be a
+		// no-op rather than downgrading it into the PN hosted namespace.
+		const targetUser = '99999999999@hosted.lid'
+		const mockResult: USyncQueryResultList[] = [
+			{
+				id: targetUser,
+				devices: {
+					deviceList: [{ id: 99, keyIndex: 1, isHosted: false }]
+				}
+			}
+		]
+
+		const result = extractDeviceJids(mockResult, myJid, myLid, false)
+
+		expect(result).toHaveLength(1)
+		expect(result[0]!.domainType).toBe(WAJIDDomains.HOSTED_LID)
+		expect(result[0]!.server).toBe('hosted.lid')
+	})
+
 	it('should not let a hosted device rewrite the domain of later devices in the same list', () => {
 		const targetUser = '88888888888@s.whatsapp.net'
 		const mockResult: USyncQueryResultList[] = [
