@@ -1406,7 +1406,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "wacore-appstate"
 version = "0.6.0"
-source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#05c98a1aa4c6d07a0285f5fbdcd418dd74e9cef5"
+source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#37ae4107d7b6657509c8813747a2c2a371ca6568"
 dependencies = [
  "anyhow",
  "buffa",
@@ -1427,7 +1427,7 @@ dependencies = [
 [[package]]
 name = "wacore-binary"
 version = "0.6.0"
-source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#05c98a1aa4c6d07a0285f5fbdcd418dd74e9cef5"
+source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#37ae4107d7b6657509c8813747a2c2a371ca6568"
 dependencies = [
  "bytes",
  "compact_str",
@@ -1444,7 +1444,7 @@ dependencies = [
 [[package]]
 name = "wacore-derive"
 version = "0.6.0"
-source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#05c98a1aa4c6d07a0285f5fbdcd418dd74e9cef5"
+source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#37ae4107d7b6657509c8813747a2c2a371ca6568"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1454,7 +1454,7 @@ dependencies = [
 [[package]]
 name = "wacore-libsignal"
 version = "0.6.0"
-source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#05c98a1aa4c6d07a0285f5fbdcd418dd74e9cef5"
+source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#37ae4107d7b6657509c8813747a2c2a371ca6568"
 dependencies = [
  "aes",
  "async-lock",
@@ -1485,7 +1485,7 @@ dependencies = [
 [[package]]
 name = "wacore-noise"
 version = "0.6.0"
-source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#05c98a1aa4c6d07a0285f5fbdcd418dd74e9cef5"
+source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#37ae4107d7b6657509c8813747a2c2a371ca6568"
 dependencies = [
  "anyhow",
  "buffa",
@@ -1513,7 +1513,7 @@ dependencies = [
 [[package]]
 name = "waproto"
 version = "0.6.0"
-source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#05c98a1aa4c6d07a0285f5fbdcd418dd74e9cef5"
+source = "git+https://github.com/jlucaso1/whatsapp-rust.git?branch=main#37ae4107d7b6657509c8813747a2c2a371ca6568"
 dependencies = [
  "buffa",
  "buffa-build",

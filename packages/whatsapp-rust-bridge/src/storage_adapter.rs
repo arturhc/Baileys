@@ -399,6 +399,7 @@ impl JsStorageAdapter {
                     cipher_key: Some(key.into()),
                     mac_key: Some(vec![0u8; 32].into()),
                     iv: Some(vec![0u8; 16].into()),
+                    seed: None,
                 });
             }
 
@@ -422,6 +423,7 @@ impl JsStorageAdapter {
                     cipher_key: Some(key.into()),
                     mac_key: Some(vec![0u8; 32].into()),
                     iv: Some(vec![0u8; 16].into()),
+                    seed: None,
                 });
             }
 
