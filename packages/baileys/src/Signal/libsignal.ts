@@ -10,11 +10,11 @@ import {
 	hasLogger,
 	importLegacySessionRecordV1,
 	processBundleWithSnapshot,
+	projectLegacySenderKeyRecordV1,
 	projectLegacySessionRecordV1,
 	ProtocolAddress,
 	SenderKeyDistributionMessage,
 	SenderKeyName,
-	SenderKeyRecord,
 	SessionRecord,
 	setLogger
 } from 'whatsapp-rust-bridge'
@@ -382,14 +382,9 @@ export function makeLibSignalRepository(
 			// then clobber with an empty record. Removing it eliminates that
 			// race window without changing observable behavior — the in-lock
 			// re-check handles the first-time-seeing-this-sender case.
-			return parsedKeys.transactWith({ records: [{ type: 'sender-key', id: senderNameStr }] }, async () => {
-				const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
-				if (!senderKey) {
-					await storage.storeSenderKey(senderNameStr, new SenderKeyRecord().serialize())
-				}
-
-				await builder.process(senderName, senderMsg)
-			})
+			return parsedKeys.transactWith({ records: [{ type: 'sender-key', id: senderNameStr }] }, async () =>
+				builder.process(senderName, senderMsg)
+			)
 		},
 		async decryptMessage({ jid, type, ciphertext }) {
 			// A prekey message names the one-time key it consumes, so the snapshot
@@ -977,7 +972,10 @@ function signalStorage(
 			return key ?? null
 		},
 		storeSenderKey: async (keyId: string, keyBytes: Uint8Array) => {
-			await keys.set({ 'sender-key': { [keyId]: keyBytes.slice() } })
+			// Same policy as sessions: the row keeps the shape a pre-WASM release
+			// reads. Every field of a sender-key state has a v1 counterpart, so
+			// unlike a session this conversion cannot lose anything.
+			await keys.set({ 'sender-key': { [keyId]: projectLegacySenderKeyRecordV1(keyBytes) } })
 		},
 		getOurRegistrationId: () => creds.registrationId,
 		getOurIdentity: () => {

@@ -108,10 +108,9 @@ describe('rolling back to a pre-WASM release', () => {
 		expect(JSON.stringify(again)).toBe(JSON.stringify(stored))
 	})
 
-	it('leaves a group sender key in a shape the old build cannot read', async () => {
+	it('leaves a group sender key in the shape the old build reads', async () => {
 		const bob = makeBob()
 
-		// Reading the legacy row is fine; writing is what changes the shape.
 		await bob.repository.decryptGroupMessage({
 			group: groupJid,
 			authorJid: aliceJid,
@@ -119,14 +118,32 @@ describe('rolling back to a pre-WASM release', () => {
 		})
 
 		const stored = bob.data['sender-key']?.[`${groupJid}::5511900000001::0`]
-		// Asserted before the throw below: a missing row, or one still holding the
-		// legacy object, would make Buffer.from throw on its own and the assertion
-		// would pass without proving the bridge wrote bytes.
 		expect(ArrayBuffer.isView(stored)).toBe(true)
 
-		// The JS backend parses this row as JSON. Once this backend has written
-		// it, that parse fails: there is no projection for sender keys, so a
-		// rollback needs the group keys to be redistributed.
-		expect(() => JSON.parse(Buffer.from(stored as Uint8Array).toString())).toThrow()
+		// The JS backend parses this row as JSON, so a rollback keeps the group
+		// working instead of needing the sender keys redistributed.
+		const states = JSON.parse(Buffer.from(stored as Uint8Array).toString())
+		expect(Array.isArray(states)).toBe(true)
+		expect(states.length).toBeGreaterThan(0)
+		for (const state of states) {
+			expect(state).toHaveProperty('senderKeyId')
+			expect(state.senderChainKey).toHaveProperty('seed')
+			expect(state.senderSigningKey).toHaveProperty('public')
+		}
+	})
+
+	it('advances that row without leaving the legacy shape', async () => {
+		const bob = makeBob()
+		const first = bob.data['sender-key']?.[`${groupJid}::5511900000001::0`]
+
+		await bob.repository.decryptGroupMessage({
+			group: groupJid,
+			authorJid: aliceJid,
+			msg: Buffer.from(fixture.pendingGroup[0]!.ct, 'base64')
+		})
+
+		const after = bob.data['sender-key']?.[`${groupJid}::5511900000001::0`]
+		expect(after).not.toEqual(first)
+		expect(() => JSON.parse(Buffer.from(after as Uint8Array).toString())).not.toThrow()
 	})
 })
