@@ -747,8 +747,17 @@ fn get_string(obj: &JsValue, key: &str) -> Option<String> {
         .and_then(|v| v.as_string())
 }
 
+/// Reflect::get answers `Ok(undefined)` for a property that is not there, so
+/// mapping it straight to Some() makes "absent" indistinguishable from "present".
+/// Callers rely on None to default or to raise a clear error, and one of them fed
+/// the undefined to `Array::from`, which throws across the boundary.
 fn get_object(obj: &JsValue, key: &str) -> Option<JsValue> {
-    js_sys::Reflect::get(obj, &JsValue::from_str(key)).ok()
+    let value = js_sys::Reflect::get(obj, &JsValue::from_str(key)).ok()?;
+    if value.is_undefined() || value.is_null() {
+        return None;
+    }
+
+    Some(value)
 }
 
 fn get_number(obj: &JsValue, key: &str) -> Option<f64> {
