@@ -444,17 +444,16 @@ pub fn import_legacy_session_record_v1(
     record: LegacySessionRecordV1,
     context: LegacySessionLocalContext,
 ) -> Result<Uint8Array, JsValue> {
-    let identity_key = IdentityKey::decode(&context.identity_key).map_err(|error| {
-        JsValue::from_str(&format!("{}: {}", "context.identityKey", error.to_string()))
-    })?;
+    let identity_key = IdentityKey::decode(&context.identity_key)
+        .map_err(|error| JsValue::from_str(&format!("context.identityKey: {error}")))?;
     let record = CoreRecord::try_from(record)
-        .map_err(|error| JsValue::from_str(&format!("{}: {}", "record", error.to_string())))?;
+        .map_err(|error| JsValue::from_str(&format!("record: {error}")))?;
     let record = record
         .into_session_record(CoreLocalContext {
             identity_key,
             registration_id: context.registration_id,
         })
-        .map_err(|error| JsValue::from_str(&format!("{}: {}", "record", error.to_string())))?;
+        .map_err(|error| JsValue::from_str(&format!("record: {error}")))?;
     let bytes = record.serialize().map_err(|error| {
         JsValue::from_str(&format!(
             "serialize imported legacy session record: {error}"
@@ -468,18 +467,14 @@ pub fn project_legacy_session_record_v1(
     bytes: &[u8],
 ) -> Result<LegacySessionProjectionV1, JsValue> {
     let record = SessionRecord::deserialize(bytes)
-        .map_err(|error| JsValue::from_str(&format!("{}: {}", "recordBytes", error.to_string())))?;
+        .map_err(|error| JsValue::from_str(&format!("recordBytes: {error}")))?;
     match record.into_legacy_session_v1_operational() {
         Ok(record) => Ok(LegacySessionProjectionV1::Projected {
             record: record.into(),
         }),
         Err(error) => match projection_issue(error) {
             Ok(issue) => Ok(LegacySessionProjectionV1::Unrepresentable { issue }),
-            Err(error) => Err(JsValue::from_str(&format!(
-                "{}: {}",
-                "recordBytes",
-                error.to_string()
-            ))),
+            Err(error) => Err(JsValue::from_str(&format!("recordBytes: {error}"))),
         },
     }
 }
