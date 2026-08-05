@@ -36,6 +36,7 @@ import {
 	isLidUser,
 	isPnUser,
 	jidDecode,
+	jidEncode,
 	transferDevice,
 	WAJIDDomains
 } from '../WABinary'
@@ -533,15 +534,27 @@ export function makeLibSignalRepository(
 				return !migratedSessionCache.has(deviceKey)
 			})
 
-			// Bulk check session existence only for uncached devices
-			const deviceSessionKeys = uncachedDevices.map(device => `${user}.${device}`)
+			// Bulk check session existence only for uncached devices. Device 99 is
+			// always hosted, so its row may sit under either the plain or the
+			// hosted address depending on whether the mapping was known when the
+			// session was created. Probe both, or a live session is left stranded
+			// once lookups move to the LID side.
+			const deviceSessionKeys: string[] = []
+			for (const device of uncachedDevices) {
+				deviceSessionKeys.push(`${user}.${device}`)
+				if (device === '99') {
+					deviceSessionKeys.push(`${user}_${WAJIDDomains.HOSTED}.${device}`)
+				}
+			}
+
 			const existingSessions = await parsedKeys.get('session', deviceSessionKeys)
 
-			// Step 3: Convert existing sessions to JIDs (only migrate sessions that exist)
-			const deviceJids: string[] = []
+			// Step 3: Convert existing sessions to JIDs (only migrate sessions that exist).
+			// The address the row was FOUND under is carried forward: re-deriving it
+			// from the jid would address `user_128.99` for a row stored at `user.99`.
+			const found: { jid: string; addrStr: string }[] = []
 			for (const [sessionKey, sessionData] of Object.entries(existingSessions)) {
 				if (sessionData) {
-					// Session exists in storage
 					const deviceStr = sessionKey.split('.')[1]
 					if (!deviceStr) continue
 					const deviceNum = parseInt(deviceStr)
@@ -550,9 +563,11 @@ export function makeLibSignalRepository(
 						jid = `${user}:99@hosted`
 					}
 
-					deviceJids.push(jid)
+					found.push({ jid, addrStr: sessionKey })
 				}
 			}
+
+			const deviceJids = found.map(entry => entry.jid)
 
 			logger.debug(
 				{
@@ -574,12 +589,18 @@ export function makeLibSignalRepository(
 				pnUser: string
 				lidUser: string
 				deviceId: number
-				fromAddr: ProtocolAddress
+				fromAddrStr: string
 				toAddr: ProtocolAddress
 			}
 
-			const migrationOps: MigrationOp[] = deviceJids.map(jid => {
-				const lidWithDevice = transferDevice(jid, toJid)
+			const migrationOps: MigrationOp[] = found.map(({ jid, addrStr }) => {
+				// transferDevice carries the destination's server, which for a LID
+				// target is `lid`. Device 99 only exists on the hosted side, and
+				// addressing it as plain LID is rejected outright.
+				const lidWithDevice =
+					jidDecode(jid)!.device === 99
+						? transferDevice(jid, jidEncode(jidDecode(toJid)!.user, 'hosted.lid'))
+						: transferDevice(jid, toJid)
 				const fromDecoded = jidDecode(jid)!
 				const toDecoded = jidDecode(lidWithDevice)!
 
@@ -589,14 +610,14 @@ export function makeLibSignalRepository(
 					pnUser: fromDecoded.user,
 					lidUser: toDecoded.user,
 					deviceId: fromDecoded.device || 0,
-					fromAddr: jidToSignalProtocolAddress(jid),
+					fromAddrStr: addrStr,
 					toAddr: jidToSignalProtocolAddress(lidWithDevice)
 				}
 			})
 
 			const sessionRecords: RecordRef[] = []
 			for (const op of migrationOps) {
-				sessionRecords.push({ type: 'session', id: op.fromAddr.toString() })
+				sessionRecords.push({ type: 'session', id: op.fromAddrStr })
 				sessionRecords.push({ type: 'session', id: op.toAddr.toString() })
 			}
 
@@ -609,7 +630,7 @@ export function makeLibSignalRepository(
 					let migratedCount = 0
 
 					// Bulk fetch PN sessions - already exist (verified during device discovery)
-					const pnAddrStrings = Array.from(new Set(migrationOps.map(op => op.fromAddr.toString())))
+					const pnAddrStrings = Array.from(new Set(migrationOps.map(op => op.fromAddrStr)))
 					const pnSessions = await parsedKeys.get('session', pnAddrStrings)
 					// Destination rows, needed to avoid overwriting a live LID session
 					// with a legacy PN one. Both sides are already inside the lock scope.
@@ -620,7 +641,7 @@ export function makeLibSignalRepository(
 					const sessionUpdates: { [key: string]: Uint8Array | null } = {}
 
 					for (const op of migrationOps) {
-						const pnAddrStr = op.fromAddr.toString()
+						const pnAddrStr = op.fromAddrStr
 						const lidAddrStr = op.toAddr.toString()
 
 						const pnSession = pnSessions[pnAddrStr]
@@ -649,7 +670,9 @@ export function makeLibSignalRepository(
 
 							// Session exists (guaranteed from device discovery)
 							const fromSession = SessionRecord.deserialize(pnSession)
-							if (fromSession.haveOpenSession()) {
+							// Same rule as the legacy branch above: a live session already on
+							// the LID key is newer than this one and must not be overwritten.
+							if (fromSession.haveOpenSession() && !hasOpenSession(lidSessions[lidAddrStr])) {
 								// Queue for bulk update: copy to LID, delete from PN
 								sessionUpdates[lidAddrStr] = fromSession.serialize()
 								sessionUpdates[pnAddrStr] = null

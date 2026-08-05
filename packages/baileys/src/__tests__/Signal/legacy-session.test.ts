@@ -10,6 +10,8 @@ import {
 import { makeLibSignalRepository } from '../../Signal/libsignal'
 import type { SignalAuthState, SignalDataSet, SignalDataTypeMap, SignalKeyStore } from '../../Types'
 import { addTransactionCapability, initAuthCreds } from '../../Utils/auth-utils'
+import { generateSignalPubKey } from '../../Utils/crypto'
+import { WAJIDDomains } from '../../WABinary'
 
 const logger = P({ level: 'silent' })
 
@@ -212,6 +214,105 @@ describe('repository on a pre-WASM auth state', () => {
 		expect(pickOpenLegacySession(data.session![lidAddr] as never)?.registrationId).toBe(333)
 		// ...and the PN row is not cleared, since nothing was moved.
 		expect(data.session![addr]).toBeDefined()
+	})
+
+	/** Bytes of a real bridge session, exactly as injectE2ESession stores them. */
+	const bridgeSessionBytes = async (jid: string, preKeyId: number): Promise<Uint8Array> => {
+		const peerCreds = initAuthCreds()
+		const { repository, data } = makeRepository()
+		await repository.injectE2ESession({
+			jid,
+			session: {
+				registrationId: peerCreds.registrationId,
+				identityKey: generateSignalPubKey(peerCreds.signedIdentityKey.public),
+				preKey: {
+					keyId: preKeyId,
+					publicKey: generateSignalPubKey(peerCreds.signedPreKey.keyPair.public)
+				},
+				signedPreKey: {
+					keyId: peerCreds.signedPreKey.keyId,
+					publicKey: generateSignalPubKey(peerCreds.signedPreKey.keyPair.public),
+					signature: peerCreds.signedPreKey.signature
+				}
+			}
+		})
+
+		const stored = Object.values(data.session!)[0]
+		return stored as Uint8Array
+	}
+
+	it('keeps a live LID session instead of overwriting it with a post-upgrade PN one', async () => {
+		// Same rule as the legacy case, reached through the bridge-bytes branch:
+		// a session written under the PN key before the mapping was known must
+		// not clobber a newer one already on the LID key.
+		const lidJid = '18000000000001@lid'
+		const lidAddr = '18000000000001_1.0'
+		const older = await bridgeSessionBytes(pnJid, 1)
+		const newer = await bridgeSessionBytes(lidJid, 2)
+
+		const { repository, data } = makeRepository({ 'device-list': { '5511900000001': ['0'] } })
+		// Seeded outside the constructor: it JSON round-trips the seed, which
+		// would turn these byte arrays into plain objects.
+		data.session = { [addr]: older, [lidAddr]: newer }
+
+		const result = await repository.migrateSession(pnJid, lidJid)
+
+		expect(result.migrated).toBe(0)
+		// The LID row must still hold the newer session, byte for byte.
+		expect(Buffer.from(data.session![lidAddr] as Uint8Array).toString('base64')).toBe(
+			Buffer.from(newer).toString('base64')
+		)
+		expect(data.session![addr]).toBeDefined()
+	})
+
+	it('migrates a post-upgrade PN session when the LID key is free', async () => {
+		const lidJid = '18000000000002@lid'
+		const lidAddr = '18000000000002_1.0'
+		const pnBytes = await bridgeSessionBytes(pnJid, 3)
+
+		const { repository, data } = makeRepository({ 'device-list': { '5511900000001': ['0'] } })
+		data.session = { [addr]: pnBytes }
+
+		const result = await repository.migrateSession(pnJid, lidJid)
+
+		expect(result.migrated).toBe(1)
+		expect(data.session![lidAddr]).toBeDefined()
+		expect(data.session![addr]).toBeUndefined()
+	})
+
+	it('migrates a device-99 session stored under the hosted address', async () => {
+		// A device-99 session created before the mapping was known lands on the
+		// hosted address. Discovery used to probe only `user.99`, so the row was
+		// never found and went stale once lookups moved to the LID side.
+		const lidJid = '18000000000003@lid'
+		const hostedAddr = `5511900000001_${WAJIDDomains.HOSTED}.99`
+		const pnBytes = await bridgeSessionBytes('5511900000001:99@hosted', 4)
+
+		const { repository, data } = makeRepository({ 'device-list': { '5511900000001': ['99'] } })
+		data.session = { [hostedAddr]: pnBytes }
+
+		const result = await repository.migrateSession(pnJid, lidJid)
+
+		expect(result.migrated).toBe(1)
+		// The row moves to the hosted-LID address and the source is cleared.
+		expect(data.session![`18000000000003_${WAJIDDomains.HOSTED_LID}.99`]).toBeDefined()
+		expect(data.session![hostedAddr]).toBeUndefined()
+	})
+
+	it('migrates a device-99 session stored under the plain address', async () => {
+		// The other half of the same problem: the row exists at `user.99`, but the
+		// address was re-derived from the jid as `user_128.99`, so nothing matched.
+		const lidJid = '18000000000004@lid'
+		const plainAddr = '5511900000001.99'
+		const pnBytes = await bridgeSessionBytes('5511900000001:99@hosted', 5)
+
+		const { repository, data } = makeRepository({ 'device-list': { '5511900000001': ['99'] } })
+		data.session = { [plainAddr]: pnBytes }
+
+		const result = await repository.migrateSession(pnJid, lidJid)
+
+		expect(result.migrated).toBe(1)
+		expect(data.session![plainAddr]).toBeUndefined()
 	})
 
 	it('does not migrate a legacy record whose states are all closed', async () => {
