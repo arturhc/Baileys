@@ -9,13 +9,11 @@ import { addTransactionCapability } from '../../Utils/auth-utils'
 import fixture from '../fixtures/legacy-session-rc9.json'
 
 /**
- * Going back to a pre-WASM release. Sessions are written in the shape the JS
- * libsignal reads, so a rollback is swapping the package: there is no
- * conversion step to get wrong.
- *
- * Sender keys have no such projection. A group key written by this backend
- * cannot be read by the old one, so that limitation is asserted here rather
- * than left to be discovered during a rollback.
+ * Going back to a pre-WASM release. Sessions and group sender keys are both
+ * written in the shape the JS backend reads, so a rollback is swapping the
+ * package: there is no conversion step to get wrong, and no group key to
+ * redistribute. These cases pin that, since nothing else would catch the day a
+ * row starts being written in the native shape instead.
  */
 const logger = P({ level: 'silent' })
 

@@ -1204,8 +1204,10 @@ pub mod legacy_sender_key {
     #[serde(rename_all = "camelCase")]
     struct SigningKey<'a> {
         public: Bytes<'a>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        private: Option<Bytes<'a>>,
+        /// Always written, empty when there is none: that is what the JS backend
+        /// produced for every sender key received from someone else, and the
+        /// point of this shape is to be indistinguishable from what it wrote.
+        private: Bytes<'a>,
     }
 
     #[derive(Serialize)]
@@ -1237,7 +1239,7 @@ pub mod legacy_sender_key {
                 },
                 sender_signing_key: SigningKey {
                     public: bytes(&state.signing_key.public),
-                    private: state.signing_key.private.as_deref().map(bytes),
+                    private: bytes(state.signing_key.private.as_deref().unwrap_or(&[])),
                 },
                 sender_message_keys: state
                     .message_keys
@@ -1380,6 +1382,27 @@ mod legacy_sender_key_tests {
         assert!(
             text.contains(r#""type":"Buffer""#),
             "bytes use the Buffer envelope"
+        );
+    }
+
+    /// A sender key received from someone else has no private signing key, and
+    /// the JS backend still wrote the field as an empty Buffer. Omitting it
+    /// would make the row distinguishable from one that backend produced.
+    #[test]
+    fn keeps_an_empty_private_signing_key_rather_than_dropping_it() {
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+        let signing = KeyPair::generate(&mut rng);
+        let mut record = SenderKeyRecord::new_empty();
+        record
+            .add_sender_key_state(3, 7, 42, &[9u8; 32], signing.public_key, None)
+            .expect("state added");
+
+        let bytes = legacy_sender_key::serialize(record).expect("serialize");
+        let text = String::from_utf8(bytes).expect("utf8");
+
+        assert!(
+            text.contains(r#""private":{"type":"Buffer","data":[]}"#),
+            "got {text}"
         );
     }
 }
