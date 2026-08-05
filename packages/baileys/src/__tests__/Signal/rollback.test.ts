@@ -118,10 +118,14 @@ describe('rolling back to a pre-WASM release', () => {
 			msg: Buffer.from(fixture.pendingGroup[0]!.ct, 'base64')
 		})
 
-		const stored = bob.data['sender-key']![`${groupJid}::5511900000001::0`] as Uint8Array
+		const stored = bob.data['sender-key']?.[`${groupJid}::5511900000001::0`] as Uint8Array | undefined
+		// Asserted before the throw below: a missing row would make Buffer.from
+		// throw on its own and the assertion would pass having proved nothing.
+		expect(stored).toBeDefined()
+
 		// The JS backend parses this row as JSON. Once this backend has written
 		// it, that parse fails: there is no projection for sender keys, so a
 		// rollback needs the group keys to be redistributed.
-		expect(() => JSON.parse(Buffer.from(stored).toString())).toThrow()
+		expect(() => JSON.parse(Buffer.from(stored!).toString())).toThrow()
 	})
 })
