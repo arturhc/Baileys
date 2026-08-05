@@ -113,13 +113,29 @@ describe('snapshot session path', () => {
 
 		const writes = alice.recorder.calls.filter(call => call.op === 'set')
 		expect(writes).toHaveLength(1)
-		// Encrypt pins the peer identity alongside the session; both land together.
-		expect(writes[0]!.types.sort()).toEqual(['identity-key', 'session'])
+		// The peer identity is already known and unchanged, so only the session is
+		// written. Reporting it every time would rewrite that row once per device
+		// on every message sent.
+		expect(writes[0]!.types).toEqual(['session'])
 
 		// Every read must precede the single write: a read after it would mean
 		// the operation went back to storage mid-flight.
 		const write = alice.recorder.calls.findIndex(call => call.op === 'set')
 		expect(alice.recorder.calls.slice(write + 1).some(call => call.op === 'get')).toBe(false)
+	})
+
+	it('does not rewrite the peer identity once it is known', async () => {
+		const alice = makeParty()
+		const bob = makeParty()
+		await alice.repository.injectE2ESession({ jid: bobJid, session: await bundleOf(bob, 1) })
+
+		alice.recorder.calls.length = 0
+		for (let index = 0; index < 4; index++) {
+			await alice.repository.encryptMessage({ jid: bobJid, data: Buffer.from(`m${index}`) })
+		}
+
+		const identityWrites = alice.recorder.calls.filter(call => call.op === 'set' && call.types.includes('identity-key'))
+		expect(identityWrites).toHaveLength(0)
 	})
 
 	it('deletes the consumed pre-key in the same write that stores the session', async () => {
@@ -172,6 +188,43 @@ describe('snapshot session path', () => {
 
 		expect(Buffer.from(plaintext).toString()).toBe('two')
 		expect(alice.recorder.calls.some(call => call.types.includes('pre-key'))).toBe(false)
+	})
+
+	it('stores the new session when the peer identity changes', async () => {
+		// A reinstalled peer sends a prekey message under a new identity. The
+		// store reports the old session as void AND the core builds a new one in
+		// the same operation, so the write must land the new session rather than
+		// the deletion.
+		const alice = makeParty()
+		const bob = makeParty()
+		const bobAgain = makeParty()
+
+		await alice.repository.injectE2ESession({ jid: bobJid, session: await bundleOf(bob, 1) })
+		const first = await alice.repository.encryptMessage({ jid: bobJid, data: Buffer.from('one') })
+		await bob.repository.decryptMessage({ jid: aliceJid, ...first })
+
+		// bob reinstalls: same jid, brand new identity, and he opens a session to
+		// alice from scratch.
+		await bobAgain.repository.injectE2ESession({ jid: aliceJid, session: await bundleOf(alice, 9) })
+		const fromNewBob = await bobAgain.repository.encryptMessage({
+			jid: aliceJid,
+			data: Buffer.from('it is me again')
+		})
+
+		alice.recorder.calls.length = 0
+		const plaintext = await alice.repository.decryptMessage({ jid: bobJid, ...fromNewBob })
+
+		expect(Buffer.from(plaintext).toString()).toBe('it is me again')
+		// The row must hold the new session, not be deleted.
+		expect(alice.recorder.data['session']?.['2222222222.0']).toBeDefined()
+		// ...and the identity is rewritten, since this one really did change.
+		const writes = alice.recorder.calls.filter(call => call.op === 'set')
+		expect(writes.some(call => call.types.includes('identity-key'))).toBe(true)
+
+		// The session must still work afterwards.
+		const reply = await alice.repository.encryptMessage({ jid: bobJid, data: Buffer.from('welcome back') })
+		const received = await bobAgain.repository.decryptMessage({ jid: aliceJid, ...reply })
+		expect(Buffer.from(received).toString()).toBe('welcome back')
 	})
 
 	it('leaves storage untouched when the operation fails', async () => {

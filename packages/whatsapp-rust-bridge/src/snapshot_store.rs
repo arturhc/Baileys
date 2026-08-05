@@ -142,7 +142,13 @@ impl IdentityKeyStore for SnapshotStore {
         let bytes = identity.serialize().to_vec();
         let mut inner = self.inner.borrow_mut();
         let previous = inner.peer_identity.replace(bytes.clone());
-        inner.changes.identity = Some(bytes.clone());
+
+        // The core calls this on every encrypt and decrypt to reassert trust on
+        // first use. Reporting a change when the key is the same would make the
+        // caller rewrite the identity row on every message, once per device.
+        if previous.as_deref() != Some(bytes.as_slice()) {
+            inner.changes.identity = Some(bytes.clone());
+        }
 
         match previous {
             Some(old) if old != bytes => {
