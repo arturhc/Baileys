@@ -192,54 +192,67 @@ export function makeLibSignalRepository(
 		const address = jidToSignalProtocolAddress(jid)
 		const wireJid = await resolveLIDSignalAddress(address.toString())
 
-		return parsedKeys.transactWith({ records: [{ type: 'session', id: wireJid }] }, async () => {
-			const [sessions, identities] = await Promise.all([
-				parsedKeys.get('session', [wireJid]),
-				parsedKeys.get('identity-key', [wireJid])
-			])
-
-			const preKeys: SignalSnapshot['preKeys'] = []
-			for (const id of extra?.preKeyIds ?? []) {
-				const { [id]: stored } = await parsedKeys.get('pre-key', [String(id)])
-				if (stored) {
-					preKeys.push({ id, keyPair: { public: stored.public, private: stored.private } })
-				}
-			}
-
-			const snapshot: SignalSnapshot = {
-				identity: {
-					public: creds.signedIdentityKey.public,
-					private: creds.signedIdentityKey.private
-				},
-				registrationId: creds.registrationId,
-				session: await readSessionBytes(sessions[wireJid]),
-				peerIdentity: identities[wireJid],
-				preKeys,
-				signedPreKeys: [
-					{
-						id: creds.signedPreKey.keyId,
-						keyPair: {
-							public: creds.signedPreKey.keyPair.public,
-							private: creds.signedPreKey.keyPair.private
-						},
-						signature: creds.signedPreKey.signature
-					}
+		// The identity row is locked alongside the session because applying the
+		// changeset writes it too. signalStorage.saveIdentity holds both and can
+		// clear the session when the key differs, so taking only the session here
+		// would let the two paths overwrite each other. transactWith acquires in a
+		// fixed order, so naming both cannot deadlock against it.
+		return parsedKeys.transactWith(
+			{
+				records: [
+					{ type: 'session', id: wireJid },
+					{ type: 'identity-key', id: wireJid }
 				]
-			}
+			},
+			async () => {
+				const [sessions, identities] = await Promise.all([
+					parsedKeys.get('session', [wireJid]),
+					parsedKeys.get('identity-key', [wireJid])
+				])
 
-			let result: { changes: SignalChanges } & T
-			try {
-				result = await run(snapshot, address)
-			} catch (error) {
-				// Nothing was written yet, so a failure leaves storage exactly as
-				// it was found — no half-applied session.
-				throw asError(error)
-			}
+				const preKeys: SignalSnapshot['preKeys'] = []
+				for (const id of extra?.preKeyIds ?? []) {
+					const { [id]: stored } = await parsedKeys.get('pre-key', [String(id)])
+					if (stored) {
+						preKeys.push({ id, keyPair: { public: stored.public, private: stored.private } })
+					}
+				}
 
-			const { changes, ...rest } = result
-			await applyChanges(wireJid, changes)
-			return rest as T
-		})
+				const snapshot: SignalSnapshot = {
+					identity: {
+						public: creds.signedIdentityKey.public,
+						private: creds.signedIdentityKey.private
+					},
+					registrationId: creds.registrationId,
+					session: await readSessionBytes(sessions[wireJid]),
+					peerIdentity: identities[wireJid],
+					preKeys,
+					signedPreKeys: [
+						{
+							id: creds.signedPreKey.keyId,
+							keyPair: {
+								public: creds.signedPreKey.keyPair.public,
+								private: creds.signedPreKey.keyPair.private
+							},
+							signature: creds.signedPreKey.signature
+						}
+					]
+				}
+
+				let result: { changes: SignalChanges } & T
+				try {
+					result = await run(snapshot, address)
+				} catch (error) {
+					// Nothing was written yet, so a failure leaves storage exactly as
+					// it was found — no half-applied session.
+					throw asError(error)
+				}
+
+				const { changes, ...rest } = result
+				await applyChanges(wireJid, changes)
+				return rest as T
+			}
+		)
 	}
 
 	/** Pre-WASM records are converted on read; bridge records pass straight through. */
@@ -552,7 +565,7 @@ export function makeLibSignalRepository(
 			// Step 3: Convert existing sessions to JIDs (only migrate sessions that exist).
 			// The address the row was FOUND under is carried forward: re-deriving it
 			// from the jid would address `user_128.99` for a row stored at `user.99`.
-			const found: { jid: string; addrStr: string }[] = []
+			const foundByDevice = new Map<number, { jid: string; addrStr: string }>()
 			for (const [sessionKey, sessionData] of Object.entries(existingSessions)) {
 				if (sessionData) {
 					const deviceStr = sessionKey.split('.')[1]
@@ -563,10 +576,31 @@ export function makeLibSignalRepository(
 						jid = `${user}:99@hosted`
 					}
 
-					found.push({ jid, addrStr: sessionKey })
+					const already = foundByDevice.get(deviceNum)
+					if (already) {
+						// Both historical shapes hold a row for this device, and they
+						// share one destination. Migrating both would delete both and
+						// keep whichever landed last, dropping a ratchet that may still
+						// be live. Take the hosted address, which is the shape written
+						// today, and leave the other row where it is.
+						const hostedIsNew = sessionKey.includes('_')
+						logger.warn(
+							{ device: deviceNum, migrating: hostedIsNew ? sessionKey : already.addrStr },
+							'device has a session under both the plain and hosted address; migrating one and leaving the other'
+						)
+
+						if (hostedIsNew) {
+							foundByDevice.set(deviceNum, { jid, addrStr: sessionKey })
+						}
+
+						continue
+					}
+
+					foundByDevice.set(deviceNum, { jid, addrStr: sessionKey })
 				}
 			}
 
+			const found = Array.from(foundByDevice.values())
 			const deviceJids = found.map(entry => entry.jid)
 
 			logger.debug(

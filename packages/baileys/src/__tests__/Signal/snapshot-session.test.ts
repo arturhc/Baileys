@@ -1,7 +1,13 @@
 import { describe, expect, it } from '@jest/globals'
 import P from 'pino'
 import { makeLibSignalRepository } from '../../Signal/libsignal'
-import type { SignalAuthState, SignalDataSet, SignalDataTypeMap, SignalKeyStore } from '../../Types'
+import type {
+	SignalAuthState,
+	SignalDataSet,
+	SignalDataTypeMap,
+	SignalKeyStore,
+	SignalKeyStoreWithRecordTransaction
+} from '../../Types'
 import { addTransactionCapability, initAuthCreds } from '../../Utils/auth-utils'
 import { generateSignalPubKey } from '../../Utils/crypto'
 
@@ -14,6 +20,15 @@ import { generateSignalPubKey } from '../../Utils/crypto'
  */
 
 const logger = P({ level: 'silent' })
+
+const deferred = () => {
+	let resolve!: () => void
+	const promise = new Promise<void>(r => (resolve = r))
+	return { promise, resolve }
+}
+
+/** Lets any already-queued microtasks and timers run before checking state. */
+const tick = () => new Promise<void>(resolve => setTimeout(resolve, 20))
 
 type Call = { op: 'get' | 'set'; types: string[]; ids: string[] }
 
@@ -177,6 +192,42 @@ describe('snapshot session path', () => {
 		// half-applied state is what corrupts a session.
 		expect(bob.recorder.calls.filter(call => call.op === 'set')).toHaveLength(0)
 		expect(bob.recorder.data['session']).toBeUndefined()
+	})
+
+	it('holds the identity row too, so the group path cannot race it', async () => {
+		// Applying the changeset writes identity-key as well as session, and
+		// signalStorage.saveIdentity does a read-modify-write on that row while
+		// holding its lock (clearing the session when the key differs). If the
+		// session path took only the session lock, the two would overwrite each
+		// other. Holding the identity lock from outside must therefore block it.
+		const alice = makeParty()
+		const bob = makeParty()
+		await alice.repository.injectE2ESession({ jid: bobJid, session: await bundleOf(bob, 1) })
+
+		const keys = alice.auth.keys as SignalKeyStoreWithRecordTransaction
+		const wireJid = '2222222222.0'
+
+		let encryptFinished = false
+		const release = deferred()
+		// Held from a scope of its own: calling encrypt inside the callback would
+		// nest it, and a nested scope does not contend with its parent.
+		const holding = keys.transactWith({ records: [{ type: 'identity-key', id: wireJid }] }, async () => {
+			await release.promise
+		})
+		await tick()
+
+		const encrypting = alice.repository.encryptMessage({ jid: bobJid, data: Buffer.from('blocked') }).then(() => {
+			encryptFinished = true
+		})
+
+		await Promise.race([encrypting, tick()])
+		expect(encryptFinished).toBe(false)
+
+		release.resolve()
+		await holding
+		await encrypting
+		await holding
+		expect(encryptFinished).toBe(true)
 	})
 
 	it('keeps the chain monotonic when encrypts overlap on one session', async () => {

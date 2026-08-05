@@ -315,6 +315,30 @@ describe('repository on a pre-WASM auth state', () => {
 		expect(data.session![plainAddr]).toBeUndefined()
 	})
 
+	it('keeps one device-99 row when both address shapes hold a session', async () => {
+		// The two shapes share a single destination. Migrating both would delete
+		// both and keep whichever was written last, losing a live ratchet.
+		const lidJid = '18000000000005@lid'
+		const plainAddr = '5511900000001.99'
+		const hostedAddr = `5511900000001_${WAJIDDomains.HOSTED}.99`
+		const plainBytes = await bridgeSessionBytes('5511900000001:99@hosted', 6)
+		const hostedBytes = await bridgeSessionBytes('5511900000001:99@hosted', 7)
+
+		const { repository, data } = makeRepository({ 'device-list': { '5511900000001': ['99'] } })
+		data.session = { [plainAddr]: plainBytes, [hostedAddr]: hostedBytes }
+
+		const result = await repository.migrateSession(pnJid, lidJid)
+
+		expect(result.migrated).toBe(1)
+		// The hosted row is the shape written today, so it is the one that moves.
+		expect(Buffer.from(data.session![`18000000000005_${WAJIDDomains.HOSTED_LID}.99`] as Uint8Array)).toEqual(
+			Buffer.from(hostedBytes)
+		)
+		expect(data.session![hostedAddr]).toBeUndefined()
+		// The other row is left alone rather than deleted along with it.
+		expect(data.session![plainAddr]).toBeDefined()
+	})
+
 	it('does not migrate a legacy record whose states are all closed', async () => {
 		const lidJid = '18000000000001@lid'
 		const closedOnly = {
