@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals'
 import P from 'pino'
+import { hasOpenLegacySession, isLegacySessionRecord } from '../../Signal/legacy-session'
 import { makeLibSignalRepository } from '../../Signal/libsignal'
 import type {
 	SignalAuthState,
@@ -236,11 +237,24 @@ describe('snapshot session path', () => {
 		await alice.repository.injectE2ESession({ jid: bobJid, session: await bundleOf(bob, 1) })
 		const opener = await alice.repository.encryptMessage({ jid: bobJid, data: Buffer.from('hello') })
 
-		bob.recorder.data['session'] = { '1111111111.0': Uint8Array.from([9, 9, 9, 9]) }
+		const corrupt = Uint8Array.from([9, 9, 9, 9])
+		bob.recorder.data['session'] = { '1111111111.0': corrupt }
 
 		const plaintext = await bob.repository.decryptMessage({ jid: aliceJid, ...opener })
-
 		expect(Buffer.from(plaintext).toString()).toBe('hello')
+
+		// Decrypting is half of it: the rebuilt session has to land, or the next
+		// message hits the same bad row and nothing was actually recovered.
+		const stored = bob.recorder.data['session']!['1111111111.0']
+		expect(stored).not.toEqual(corrupt)
+		expect(isLegacySessionRecord(stored)).toBe(true)
+		expect(hasOpenLegacySession(stored as never)).toBe(true)
+		// ...and the pre-key the message consumed is gone, as on the normal path.
+		expect(bob.recorder.data['pre-key']?.[1]).toBeUndefined()
+
+		// The recovered session carries the conversation on its own.
+		const reply = await bob.repository.encryptMessage({ jid: aliceJid, data: Buffer.from('back') })
+		expect(Buffer.from(await alice.repository.decryptMessage({ jid: bobJid, ...reply })).toString()).toBe('back')
 	})
 
 	it('still refuses a whisper message when the stored session is unreadable', async () => {
