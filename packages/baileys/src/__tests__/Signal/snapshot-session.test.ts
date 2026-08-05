@@ -260,27 +260,28 @@ describe('snapshot session path', () => {
 		const keys = alice.auth.keys as SignalKeyStoreWithRecordTransaction
 		const wireJid = '2222222222.0'
 
-		let encryptFinished = false
+		// Recorded rather than timed: asserting "not finished yet" after a delay
+		// would also hold on a slow machine where the encrypt simply had not got
+		// there, so the order is what proves it waited.
+		const order: string[] = []
 		const release = deferred()
 		// Held from a scope of its own: calling encrypt inside the callback would
 		// nest it, and a nested scope does not contend with its parent.
-		const holding = keys.transactWith({ records: [{ type: 'identity-key', id: wireJid }] }, async () => {
-			await release.promise
-		})
+		const holding = keys
+			.transactWith({ records: [{ type: 'identity-key', id: wireJid }] }, () => release.promise)
+			.then(() => order.push('lock released'))
+
 		await tick()
+		const encrypting = alice.repository
+			.encryptMessage({ jid: bobJid, data: Buffer.from('blocked') })
+			.then(() => order.push('encrypt finished'))
 
-		const encrypting = alice.repository.encryptMessage({ jid: bobJid, data: Buffer.from('blocked') }).then(() => {
-			encryptFinished = true
-		})
-
+		// Give an unblocked encrypt every chance to land before the lock goes.
 		await Promise.race([encrypting, tick()])
-		expect(encryptFinished).toBe(false)
-
 		release.resolve()
-		await holding
-		await encrypting
-		await holding
-		expect(encryptFinished).toBe(true)
+		await Promise.all([holding, encrypting])
+
+		expect(order).toEqual(['lock released', 'encrypt finished'])
 	})
 
 	it('keeps the chain monotonic when encrypts overlap on one session', async () => {

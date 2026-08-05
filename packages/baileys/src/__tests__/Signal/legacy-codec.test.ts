@@ -12,7 +12,10 @@ const logger = P({ level: 'silent' })
 
 const revive = (value: unknown): unknown => {
 	if (typeof value === 'object' && value !== null && (value as { type?: string }).type === 'Buffer') {
-		return Buffer.from((value as { data: string }).data, 'base64')
+		// JSON.stringify writes a Buffer as { type: 'Buffer', data: number[] };
+		// fixtures captured by hand may carry base64 instead.
+		const { data } = value as { data: number[] | string }
+		return typeof data === 'string' ? Buffer.from(data, 'base64') : Buffer.from(data)
 	}
 
 	if (Array.isArray(value)) return value.map(revive)

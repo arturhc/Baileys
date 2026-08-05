@@ -50,6 +50,9 @@ describe('identity-key wire format', () => {
 			jid: '2222222222@s.whatsapp.net',
 			session: {
 				registrationId: bob.creds.registrationId,
+				// Prefixed, as the wire format and every caller supply it. The bridge
+				// normalises the identity inside a snapshot but decodes the bundle's
+				// key strictly, so a bare 32 bytes is rejected here.
 				identityKey: generateSignalPubKey(bob.creds.signedIdentityKey.public),
 				preKey: { keyId: 1, publicKey: generateSignalPubKey(pk.public) },
 				signedPreKey: {

@@ -115,10 +115,15 @@ const toTypedSession = (entry: LegacyEntryJson): LegacySessionV1 => {
 
 /** Legacy on-disk JSON → the bridge's typed model. */
 export const toTypedRecord = (record: LegacySessionRecord): LegacySessionRecordV1 => {
-	const sessions = Object.entries(record._sessions || {}).map(([indexKey, entry]) => ({
-		indexKey: decode(indexKey, 'session index key'),
-		session: toTypedSession(entry as LegacyEntryJson)
-	}))
+	// A hole in the record is skipped rather than cast: converting undefined
+	// would throw and take the whole record with it, losing the live sessions
+	// alongside the broken entry.
+	const sessions = Object.entries(record._sessions || {})
+		.filter((pair): pair is [string, LegacyEntryJson] => pair[1] !== undefined && pair[1] !== null)
+		.map(([indexKey, entry]) => ({
+			indexKey: decode(indexKey, 'session index key'),
+			session: toTypedSession(entry)
+		}))
 
 	return { sessions }
 }

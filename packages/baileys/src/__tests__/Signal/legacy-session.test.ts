@@ -312,6 +312,9 @@ describe('repository on a pre-WASM auth state', () => {
 		const result = await repository.migrateSession(pnJid, lidJid)
 
 		expect(result.migrated).toBe(1)
+		expect(Buffer.from(data.session![`18000000000004_${WAJIDDomains.HOSTED_LID}.99`] as Uint8Array)).toEqual(
+			Buffer.from(pnBytes)
+		)
 		expect(data.session![plainAddr]).toBeUndefined()
 	})
 
