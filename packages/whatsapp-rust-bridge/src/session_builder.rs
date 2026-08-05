@@ -22,7 +22,9 @@ impl SessionRecord {
     }
 
     pub fn to_core(&self) -> Result<CoreSessionRecord, SignalProtocolError> {
-        CoreSessionRecord::deserialize(&self.serialized_data)
+        Ok(crate::counter_lease::waive_session(
+            CoreSessionRecord::deserialize(&self.serialized_data)?,
+        ))
     }
 }
 

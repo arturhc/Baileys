@@ -202,7 +202,9 @@ fn build_store(snapshot: SignalSnapshot) -> Result<SnapshotStore, JsValue> {
     if let Some(bytes) = snapshot.sender_key {
         let record = SenderKeyRecord::deserialize(bytes.as_ref())
             .map_err(|e| err("snapshot.senderKey", e))?;
-        store.with_sender_key(record);
+        store
+            .with_sender_key(record)
+            .map_err(|e| err("snapshot.senderKey", e))?;
     }
 
     Ok(store)

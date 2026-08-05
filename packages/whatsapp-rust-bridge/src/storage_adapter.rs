@@ -857,7 +857,8 @@ impl SessionStore for JsStorageAdapter {
 
         match bytes {
             Some(data) => {
-                let record = CoreSessionRecord::deserialize(&data)?;
+                let record =
+                    crate::counter_lease::waive_session(CoreSessionRecord::deserialize(&data)?);
                 // Insert into cache and return a clone - this is required since HashMap takes ownership
                 let result = record.clone();
                 self.cached_sessions
@@ -1154,6 +1155,8 @@ impl SenderKeyStore for JsStorageAdapter {
                 CoreSenderKeyRecord::deserialize(&migrated_bytes)?
             }
         };
+
+        let record = crate::counter_lease::waive_sender_key(record)?;
 
         self.cached_sender_keys
             .borrow_mut()

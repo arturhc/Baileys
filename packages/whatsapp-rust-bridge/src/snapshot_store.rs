@@ -73,7 +73,7 @@ impl SnapshotStore {
     }
 
     pub fn with_session(&self, record: SessionRecord) {
-        self.inner.borrow_mut().session = Some(record);
+        self.inner.borrow_mut().session = Some(crate::counter_lease::waive_session(record));
     }
 
     pub fn with_peer_identity_bytes(&self, identity: Vec<u8>) {
@@ -88,8 +88,9 @@ impl SnapshotStore {
         self.inner.borrow_mut().signed_pre_keys.insert(id, record);
     }
 
-    pub fn with_sender_key(&self, record: SenderKeyRecord) {
-        self.inner.borrow_mut().sender_key = Some(record);
+    pub fn with_sender_key(&self, record: SenderKeyRecord) -> SignalResult<()> {
+        self.inner.borrow_mut().sender_key = Some(crate::counter_lease::waive_sender_key(record)?);
+        Ok(())
     }
 
     pub fn take_changes(&self) -> SnapshotChanges {
