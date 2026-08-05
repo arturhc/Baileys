@@ -21,8 +21,8 @@ describe("SessionCipher end-to-end", () => {
 
     // Alice needs to trust Bob's identity key, and vice versa.
     // This simulates fetching the key from a server and verifying it.
-    aliceStorage.trustIdentity("bob", bobStorage.ourIdentityKeyPair.pubKey);
-    bobStorage.trustIdentity("alice", aliceStorage.ourIdentityKeyPair.pubKey);
+    aliceStorage.trustIdentity("bob.1", bobStorage.ourIdentityKeyPair.pubKey);
+    bobStorage.trustIdentity("alice.1", aliceStorage.ourIdentityKeyPair.pubKey);
 
     // === 2. BOB'S PRE-KEY BUNDLE ===
     // Bob generates his keys and "uploads" them to the server (i.e., we store them in his storage).
@@ -98,8 +98,8 @@ describe("SessionCipher end-to-end", () => {
     const aliceAddress = new ProtocolAddress("alice", 1);
     const bobAddress = new ProtocolAddress("bob", 1);
 
-    aliceStorage.trustIdentity("bob", bobStorage.ourIdentityKeyPair.pubKey);
-    bobStorage.trustIdentity("alice", aliceStorage.ourIdentityKeyPair.pubKey);
+    aliceStorage.trustIdentity("bob.1", bobStorage.ourIdentityKeyPair.pubKey);
+    bobStorage.trustIdentity("alice.1", aliceStorage.ourIdentityKeyPair.pubKey);
 
     const bobSignedPreKeyId = 7;
     const bobSignedPreKey = generateSignedPreKey(

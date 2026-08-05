@@ -213,13 +213,14 @@ describe("StorageAdapter Interop", () => {
       expect.stringContaining("identity persistence failed")
     );
     expect(storage.identityLoadCount).toBe(1);
-    expect(storage.getIdentity("alice")).toBeUndefined();
+    // Identity is keyed by the full address, same as the session it belongs to.
+    expect(storage.getIdentity("alice.1")).toBeUndefined();
 
     storage.failIdentityStore = false;
     storage.failSessionStore = false;
     await builder.processPreKeyBundle(bundle);
 
     expect(storage.identityLoadCount).toBe(2);
-    expect(storage.getIdentity("alice")).toEqual(bundle.identityKey);
+    expect(storage.getIdentity("alice.1")).toEqual(bundle.identityKey);
   });
 });

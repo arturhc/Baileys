@@ -82,7 +82,7 @@ describe("SessionBuilder", () => {
       0
     );
     expect(isTrusted).toBe(true);
-    expect(aliceStorage.getIdentity("bob")).toEqual(bobIdentityKeyPair.pubKey);
+    expect(aliceStorage.getIdentity("bob.1")).toEqual(bobIdentityKeyPair.pubKey);
     expect(aliceStorage.identityLoadCount).toBeGreaterThan(0);
     expect(aliceStorage.identitySaveCount).toBeGreaterThan(0);
   });
@@ -95,7 +95,7 @@ describe("SessionBuilder", () => {
     await new SessionBuilder(storage, bobAddress).processPreKeyBundle(
       first.bundle
     );
-    expect(storage.getIdentity("bob-persisted")).toEqual(
+    expect(storage.getIdentity("bob-persisted.1")).toEqual(
       first.identityKeyPair.pubKey
     );
 
@@ -104,7 +104,7 @@ describe("SessionBuilder", () => {
       second.bundle
     );
 
-    expect(storage.getIdentity("bob-persisted")).toEqual(
+    expect(storage.getIdentity("bob-persisted.1")).toEqual(
       second.identityKeyPair.pubKey
     );
     expect(storage.identityLoadCount).toBeGreaterThanOrEqual(2);
@@ -120,7 +120,7 @@ describe("SessionBuilder", () => {
     const bobSignedPreKey = generateSignedPreKey(bobIdentityKeyPair, 1);
 
     const fakeIdentity = generateIdentityKeyPair();
-    aliceStorage.trustIdentity("bob", fakeIdentity.pubKey);
+    aliceStorage.trustIdentity("bob.1", fakeIdentity.pubKey);
 
     const bobBundle = {
       registrationId: 1234,

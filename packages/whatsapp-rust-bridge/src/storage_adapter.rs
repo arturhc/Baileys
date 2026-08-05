@@ -928,7 +928,7 @@ impl IdentityKeyStore for JsStorageAdapter {
         identity: &libsignal::IdentityKey,
         direction: StoreDirection,
     ) -> SignalResult<bool> {
-        let address_name = address.name().to_string();
+        let address_name = self.get_address_string(address);
         let identity_bytes = identity.serialize();
 
         if let Some(cached_key) = self.cached_identities.borrow().get(&address_name)
@@ -962,7 +962,12 @@ impl IdentityKeyStore for JsStorageAdapter {
         address: &libsignal::ProtocolAddress,
         identity: &libsignal::IdentityKey,
     ) -> SignalResult<IdentityChange> {
-        let address_name = address.name().to_string();
+        // Identity records are keyed by the SAME address as the session they
+        // belong to. Using `name()` here drops the device id, which both keys
+        // the record differently from `load_session`/`store_session` AND makes
+        // the transaction layer lock a different id — so an identity write no
+        // longer serializes against the encrypt/decrypt touching that session.
+        let address_name = self.get_address_string(address);
         let identity_bytes = identity.serialize();
 
         let previous_identity = self.load_peer_identity(&address_name).await?;
@@ -992,7 +997,7 @@ impl IdentityKeyStore for JsStorageAdapter {
         &self,
         address: &libsignal::ProtocolAddress,
     ) -> SignalResult<Option<libsignal::IdentityKey>> {
-        let address_name = address.name().to_string();
+        let address_name = self.get_address_string(address);
         self.load_peer_identity(&address_name)
             .await?
             .map(|identity| libsignal::IdentityKey::decode(&identity))
