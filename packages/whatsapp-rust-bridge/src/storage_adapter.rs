@@ -542,6 +542,8 @@ impl JsStorageAdapter {
             });
         }
 
+        // Mirror of the order note in `legacy_sender_key::serialize`.
+        sender_key_states.reverse();
         let record = SenderKeyRecordStructure { sender_key_states };
 
         Ok(Some(record.encode_to_vec()))
@@ -1242,9 +1244,14 @@ pub mod legacy_sender_key {
 
     pub fn serialize(record: CoreSenderKeyRecord) -> SignalResult<Vec<u8>> {
         let components = record.into_components()?;
+        // The core keeps the current state in front and prunes from the back;
+        // the legacy shape is the mirror of that, current last and pruned from
+        // the front. Writing the core order out unchanged would make a pre-WASM
+        // build send under a stale key and evict the freshest one.
         let states: Vec<State<'_>> = components
             .states
             .iter()
+            .rev()
             .map(|state| State {
                 sender_key_id: state.key_id,
                 sender_chain_key: ChainKey {

@@ -126,6 +126,40 @@ describe('group sender keys', () => {
 		expect(Buffer.from(received).toString()).toBe('hello group')
 	})
 
+	it('stores rotated states oldest first, the order the JS backend reads', async () => {
+		const bob = makeParty()
+		const statesOf = () => {
+			const [key] = Object.keys(bob.data['sender-key']!)
+			return JSON.parse(Buffer.from(bob.data['sender-key']![key!] as Uint8Array).toString()) as {
+				senderKeyId: number
+			}[]
+		}
+
+		const distribute = async () => {
+			const sender = makeParty()
+			const skdm = await sender.repository.getSenderKeyDistributionMessage({ group: groupJid, meId: aliceJid })
+			await bob.repository.processSenderKeyDistributionMessage({
+				authorJid: aliceJid,
+				item: { groupId: groupJid, axolotlSenderKeyDistributionMessage: skdm } as never
+			})
+		}
+
+		const seen: number[] = []
+		for (let round = 0; round < 3; round++) {
+			await distribute()
+			// Reading after each round also exercises the import: from the second
+			// one on, the bridge parses the row it wrote and has to recover the
+			// same order it will write back.
+			seen.push(statesOf().at(-1)!.senderKeyId)
+		}
+
+		// The JS backend takes the LAST entry as the current state and drops the
+		// FIRST one on overflow. The core keeps the newest in front, so writing
+		// its order out unchanged would make a rollback pick the stale key and
+		// evict the freshest one.
+		expect(statesOf().map(state => state.senderKeyId)).toEqual(seen)
+	})
+
 	it('lets two members each distribute and send', async () => {
 		const alice = makeParty()
 		const bob = makeParty()
