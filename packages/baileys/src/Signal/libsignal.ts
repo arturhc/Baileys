@@ -113,6 +113,12 @@ function normalizeDecryptError(error: unknown): Error {
  */
 const MAX_LEGACY_MESSAGE_KEYS = 2000
 
+/** The bridge refuses a session it cannot decode; the row has to be replaced. */
+function isUnreadableSession(error: unknown): boolean {
+	const message = typeof error === 'string' ? error : error instanceof Error ? error.message : ''
+	return message.includes('snapshot.session')
+}
+
 /** Does a stored session row — bridge bytes or a pre-WASM record — hold a live state? */
 function hasOpenSession(stored: Uint8Array | undefined): boolean {
 	if (!stored) {
@@ -232,7 +238,7 @@ export function makeLibSignalRepository(
 						private: creds.signedIdentityKey.private
 					},
 					registrationId: creds.registrationId,
-					session: await readSessionBytes(sessions[wireJid]),
+					session: await readSessionBytes(wireJid, sessions[wireJid]),
 					peerIdentity: identities[wireJid],
 					preKeys,
 					signedPreKeys: [
@@ -295,18 +301,27 @@ export function makeLibSignalRepository(
 	}
 
 	/** Pre-WASM records are converted on read; bridge records pass straight through. */
-	const readSessionBytes = async (stored: unknown): Promise<Uint8Array | undefined> => {
+	const readSessionBytes = async (wireJid: string, stored: unknown): Promise<Uint8Array | undefined> => {
 		if (!stored) return undefined
 
-		if (isLegacySessionRecord(stored)) {
-			if (!hasOpenLegacySession(stored)) return undefined
-			return importLegacySessionRecordV1(toTypedRecord(stored), {
-				identityKey: generateSignalPubKey(creds.signedIdentityKey.public),
-				registrationId: creds.registrationId
-			})
-		}
+		try {
+			if (isLegacySessionRecord(stored)) {
+				if (!hasOpenLegacySession(stored)) return undefined
+				return importLegacySessionRecordV1(toTypedRecord(stored), {
+					identityKey: generateSignalPubKey(creds.signedIdentityKey.public),
+					registrationId: creds.registrationId
+				})
+			}
 
-		return stored as Uint8Array
+			return stored as Uint8Array
+		} catch (error) {
+			// A row we cannot read is reported as absent, not raised: a prekey
+			// message carries everything needed to build a replacement, and
+			// failing here would leave the conversation stuck on the bad row
+			// until someone deleted it by hand.
+			logger.warn({ wireJid, err: error }, 'stored session is unreadable, treating it as absent')
+			return undefined
+		}
 	}
 
 	/**
@@ -385,10 +400,25 @@ export function makeLibSignalRepository(
 				jid,
 				async (snapshot, address) => {
 					try {
-						const out =
-							type === 'pkmsg'
-								? await decryptPreKeyWithSnapshot(snapshot, address, ciphertext)
-								: await decryptWhisperWithSnapshot(snapshot, address, ciphertext)
+						let out
+						if (type === 'pkmsg') {
+							try {
+								out = await decryptPreKeyWithSnapshot(snapshot, address, ciphertext)
+							} catch (error) {
+								// The row is there but the bridge cannot read it. A prekey
+								// message carries everything needed to build a replacement,
+								// so retry without it rather than leaving the conversation
+								// stuck on a record only a manual delete would clear.
+								if (!snapshot.session || !isUnreadableSession(error)) {
+									throw error
+								}
+
+								logger.warn({ jid }, 'stored session is unreadable, rebuilding from the prekey message')
+								out = await decryptPreKeyWithSnapshot({ ...snapshot, session: undefined }, address, ciphertext)
+							}
+						} else {
+							out = await decryptWhisperWithSnapshot(snapshot, address, ciphertext)
+						}
 
 						if (out.changes.sessionCleared) {
 							logger.info({ jid }, 'identity key changed, session will be re-established')

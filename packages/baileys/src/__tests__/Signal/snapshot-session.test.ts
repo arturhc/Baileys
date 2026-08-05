@@ -227,6 +227,37 @@ describe('snapshot session path', () => {
 		expect(Buffer.from(received).toString()).toBe('welcome back')
 	})
 
+	it('rebuilds from a prekey message when the stored session is unreadable', async () => {
+		// A corrupt row used to be raised on read, so every retry failed and the
+		// conversation stayed stuck until someone deleted it by hand. A prekey
+		// message carries everything needed to build a replacement.
+		const alice = makeParty()
+		const bob = makeParty()
+		await alice.repository.injectE2ESession({ jid: bobJid, session: await bundleOf(bob, 1) })
+		const opener = await alice.repository.encryptMessage({ jid: bobJid, data: Buffer.from('hello') })
+
+		bob.recorder.data['session'] = { '1111111111.0': Uint8Array.from([9, 9, 9, 9]) }
+
+		const plaintext = await bob.repository.decryptMessage({ jid: aliceJid, ...opener })
+
+		expect(Buffer.from(plaintext).toString()).toBe('hello')
+	})
+
+	it('still refuses a whisper message when the stored session is unreadable', async () => {
+		// Without a prekey there is nothing to rebuild from, so the failure has
+		// to surface rather than silently start a session that decrypts nothing.
+		const alice = makeParty()
+		const bob = makeParty()
+		await alice.repository.injectE2ESession({ jid: bobJid, session: await bundleOf(bob, 1) })
+		const opener = await alice.repository.encryptMessage({ jid: bobJid, data: Buffer.from('one') })
+		await bob.repository.decryptMessage({ jid: aliceJid, ...opener })
+		const second = await alice.repository.encryptMessage({ jid: bobJid, data: Buffer.from('two') })
+
+		bob.recorder.data['session'] = { '1111111111.0': Uint8Array.from([9, 9, 9, 9]) }
+
+		await expect(bob.repository.decryptMessage({ jid: aliceJid, ...second })).rejects.toThrow()
+	})
+
 	it('leaves storage untouched when the operation fails', async () => {
 		const alice = makeParty()
 		const bob = makeParty()
