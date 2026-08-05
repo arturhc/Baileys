@@ -3,7 +3,7 @@ import P from 'pino'
 import { makeLibSignalRepository } from '../../Signal/libsignal'
 import type { SignalAuthState, SignalDataSet, SignalDataTypeMap, SignalKeyStore } from '../../Types'
 import { addTransactionCapability, initAuthCreds } from '../../Utils/auth-utils'
-import { generateSignalPubKey } from '../../Utils/crypto'
+import { Curve, generateSignalPubKey } from '../../Utils/crypto'
 import { MISSING_KEYS_ERROR_TEXT } from '../../Utils/decode-wa-message'
 
 const logger = P({ level: 'silent' })
@@ -70,7 +70,7 @@ describe('decryptMessage duplicate handling', () => {
 
 		// Alice opens a session towards Bob from Bob's published bundle.
 		const bobPreKeyId = 1
-		const preKeyPair = initAuthCreds().signedPreKey.keyPair
+		const preKeyPair = Curve.generateKeyPair()
 		await bob.auth.keys.set({ 'pre-key': { [bobPreKeyId]: preKeyPair } })
 
 		await alice.repository.injectE2ESession({

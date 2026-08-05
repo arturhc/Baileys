@@ -3,7 +3,7 @@ import P from 'pino'
 import { makeLibSignalRepository } from '../../Signal/libsignal'
 import type { SignalAuthState, SignalDataSet, SignalDataTypeMap, SignalKeyStore } from '../../Types'
 import { addTransactionCapability, initAuthCreds, makeCacheableSignalKeyStore } from '../../Utils/auth-utils'
-import { generateSignalPubKey } from '../../Utils/crypto'
+import { Curve, generateSignalPubKey } from '../../Utils/crypto'
 
 const logger = P({ level: 'silent' })
 
@@ -50,7 +50,7 @@ const makeParty = (cacheable: boolean) => {
 }
 
 const bundleOf = async (party: ReturnType<typeof makeParty>, preKeyId: number) => {
-	const preKey = initAuthCreds().signedPreKey.keyPair
+	const preKey = Curve.generateKeyPair()
 	await party.auth.keys.set({ 'pre-key': { [preKeyId]: preKey } })
 
 	return {

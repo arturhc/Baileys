@@ -9,7 +9,7 @@ import type {
 	SignalKeyStoreWithTransaction
 } from '../../Types'
 import { addTransactionCapability, initAuthCreds, makeCacheableSignalKeyStore } from '../../Utils/auth-utils'
-import { generateSignalPubKey } from '../../Utils/crypto'
+import { Curve, generateSignalPubKey } from '../../Utils/crypto'
 
 const logger = P({ level: 'silent' })
 
@@ -63,7 +63,7 @@ const makeParty = () => {
 }
 
 const bundleOf = async (party: ReturnType<typeof makeParty>, preKeyId: number) => {
-	const preKey = initAuthCreds().signedPreKey.keyPair
+	const preKey = Curve.generateKeyPair()
 	await party.auth.keys.set({ 'pre-key': { [preKeyId]: preKey } })
 
 	return {

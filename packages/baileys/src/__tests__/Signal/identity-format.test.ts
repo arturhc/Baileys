@@ -3,7 +3,7 @@ import P from 'pino'
 import { makeLibSignalRepository } from '../../Signal/libsignal'
 import type { SignalAuthState, SignalDataSet, SignalDataTypeMap, SignalKeyStore } from '../../Types'
 import { addTransactionCapability, initAuthCreds } from '../../Utils/auth-utils'
-import { generateSignalPubKey } from '../../Utils/crypto'
+import { Curve, generateSignalPubKey } from '../../Utils/crypto'
 
 const logger = P({ level: 'silent' })
 const mk = () => {
@@ -44,7 +44,7 @@ describe('identity-key wire format', () => {
 	it('writes the 33-byte prefixed form the JS libsignal also stores', async () => {
 		const alice = mk()
 		const bob = mk()
-		const pk = initAuthCreds().signedPreKey.keyPair
+		const pk = Curve.generateKeyPair()
 		await bob.auth.keys.set({ 'pre-key': { 1: pk } })
 		await alice.repository.injectE2ESession({
 			jid: '2222222222@s.whatsapp.net',
