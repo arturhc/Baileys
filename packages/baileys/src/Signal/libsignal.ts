@@ -161,12 +161,11 @@ export function makeLibSignalRepository(
 
 	const ensureSenderKeyAndCreateSkdm = async (group: string, meId: string) => {
 		const senderName = jidToSignalSenderKeyName(group, meId)
-		const senderNameStr = senderName.toString()
-		const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
-		if (!senderKey) {
-			await storage.storeSenderKey(senderNameStr, new SenderKeyRecord().serialize())
-		}
-
+		// Do not seed an empty record first: the builder creates one when the row
+		// is absent, but a stored empty record loads as a state-less session and
+		// the create then fails with InvalidSenderKeySession. The JS backend this
+		// replaced took the record object, not its bytes, and did not have that
+		// distinction.
 		const skdm = await new GroupSessionBuilder(storage).create(senderName)
 		return { senderName, skdm }
 	}
