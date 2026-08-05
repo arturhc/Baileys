@@ -1161,3 +1161,83 @@ impl SenderKeyStore for JsStorageAdapter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod js_value_tests {
+    use super::{get_bytes_from_buffer_json, get_number, get_object};
+    use wasm_bindgen::JsValue;
+    // Alias `#[test]` -> wasm_bindgen_test so these run on wasm32 via
+    // `wasm-pack test --node` (the crate has no native test target).
+    use wasm_bindgen_test::wasm_bindgen_test as test;
+
+    fn object_with(key: &str, value: JsValue) -> JsValue {
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &JsValue::from_str(key), &value).unwrap();
+        obj.into()
+    }
+
+    #[test]
+    fn absent_property_reads_as_absent() {
+        // Reflect::get answers Ok(undefined) here. Reporting that as present is
+        // what fed undefined to Array::from and threw across the boundary on a
+        // legacy sender-key state stored without senderMessageKeys.
+        let obj: JsValue = js_sys::Object::new().into();
+
+        assert!(get_object(&obj, "senderMessageKeys").is_none());
+    }
+
+    #[test]
+    fn explicit_undefined_and_null_read_as_absent() {
+        assert!(get_object(&object_with("k", JsValue::UNDEFINED), "k").is_none());
+        assert!(get_object(&object_with("k", JsValue::NULL), "k").is_none());
+    }
+
+    #[test]
+    fn a_present_value_is_returned() {
+        let value = object_with("k", JsValue::from_str("v"));
+
+        assert_eq!(
+            get_object(&value, "k").and_then(|v| v.as_string()),
+            Some("v".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_empty_array_is_present() {
+        // Distinct from absent: the state has no message keys, which is a value.
+        let value = object_with("k", js_sys::Array::new().into());
+
+        assert!(get_object(&value, "k").is_some());
+    }
+
+    #[test]
+    fn a_number_is_read_or_defaulted() {
+        let value = object_with("iteration", JsValue::from_f64(7.0));
+
+        assert_eq!(get_number(&value, "iteration"), Some(7.0));
+        assert_eq!(get_number(&value, "missing"), None);
+    }
+
+    #[test]
+    fn a_buffer_json_envelope_decodes_to_bytes() {
+        // The JS libsignal serialised Buffers as { type: 'Buffer', data: [...] }.
+        let data = js_sys::Array::new();
+        for byte in [1u8, 2, 3] {
+            data.push(&JsValue::from_f64(byte as f64));
+        }
+
+        let envelope = js_sys::Object::new();
+        js_sys::Reflect::set(&envelope, &JsValue::from_str("type"), &"Buffer".into()).unwrap();
+        js_sys::Reflect::set(&envelope, &JsValue::from_str("data"), &data).unwrap();
+        let holder = object_with("seed", envelope.into());
+
+        assert_eq!(
+            get_bytes_from_buffer_json(&holder, "seed").unwrap(),
+            Some(vec![1, 2, 3])
+        );
+        assert_eq!(
+            get_bytes_from_buffer_json(&holder, "missing").unwrap(),
+            None
+        );
+    }
+}

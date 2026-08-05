@@ -41,10 +41,11 @@
         "postbuild": "tsc -p tsconfig.json --outDir dist",
         "build": "pnpm run prebuild && pnpm run build:wasm && pnpm run build:ts && pnpm run postbuild",
         "test:typecheck": "tsc -p tsconfig.test.json --noEmit",
+        "test:rust": "wasm-pack test --node",
         "test:jest": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config jest.config.mjs --runInBand",
         "test:modules": "node --test test/module-formats.test.mjs test/module-formats.test.cjs",
         "test:package": "pnpm run test:modules && node scripts/check-package.mjs",
-        "test": "pnpm run test:typecheck && pnpm run test:jest && pnpm run test:package",
+        "test": "pnpm run test:typecheck && pnpm run test:rust && pnpm run test:jest && pnpm run test:package",
         "prepublishOnly": "pnpm run build"
     },
     "devDependencies": {

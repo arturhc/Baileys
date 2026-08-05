@@ -62,8 +62,8 @@ jobs:
       - name: Lint Rust
         run: cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings
 
-      - name: Run bridge typecheck and Jest tests
-        run: pnpm test:typecheck && pnpm test:jest
+      - name: Run bridge typecheck, Rust unit tests and Jest tests
+        run: pnpm test:typecheck && pnpm test:rust && pnpm test:jest
 
       - name: Test installed package, ESM/CommonJS, and WASM selection
         run: pnpm test:package

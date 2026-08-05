@@ -266,3 +266,124 @@ impl SenderKeyStore for SnapshotStore {
         Ok(self.inner.borrow().sender_key.clone())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Alias `#[test]` -> wasm_bindgen_test so these run on wasm32 via
+    // `wasm-pack test --node` (the crate has no native test target).
+    use wasm_bindgen_test::wasm_bindgen_test as test;
+
+    use wacore_libsignal::protocol::{IdentityKeyPair, KeyPair};
+
+    fn store() -> SnapshotStore {
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+        SnapshotStore::new(IdentityKeyPair::generate(&mut rng), 42)
+    }
+
+    fn some_identity() -> IdentityKey {
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+        IdentityKey::new(KeyPair::generate(&mut rng).public_key)
+    }
+
+    fn address() -> ProtocolAddress {
+        ProtocolAddress::new("alice", 1u32.into())
+    }
+
+    #[test]
+    async fn reports_nothing_when_the_operation_touched_nothing() {
+        let changes = store().take_changes();
+
+        assert!(changes.session.is_none());
+        assert!(changes.identity.is_none());
+        assert!(changes.removed_pre_key.is_none());
+        assert!(changes.sender_key.is_none());
+        assert!(!changes.session_cleared);
+    }
+
+    #[test]
+    async fn reports_a_first_identity() {
+        let mut store = store();
+        let identity = some_identity();
+
+        let change = store.save_identity(&address(), &identity).await.unwrap();
+
+        assert!(matches!(change, IdentityChange::NewOrUnchanged));
+        assert_eq!(
+            store.take_changes().identity.as_deref(),
+            Some(identity.serialize().as_ref())
+        );
+    }
+
+    #[test]
+    async fn stays_silent_when_the_identity_is_unchanged() {
+        let mut store = store();
+        let identity = some_identity();
+
+        store.save_identity(&address(), &identity).await.unwrap();
+        store.take_changes();
+        // The core reasserts trust on every operation; repeating the same key
+        // must not make the caller rewrite the row.
+        let change = store.save_identity(&address(), &identity).await.unwrap();
+
+        assert!(matches!(change, IdentityChange::NewOrUnchanged));
+        assert!(store.take_changes().identity.is_none());
+    }
+
+    #[test]
+    async fn voids_the_session_when_the_identity_is_replaced() {
+        let mut store = store();
+        store
+            .save_identity(&address(), &some_identity())
+            .await
+            .unwrap();
+        store.take_changes();
+
+        let replacement = some_identity();
+        let change = store.save_identity(&address(), &replacement).await.unwrap();
+
+        assert!(matches!(change, IdentityChange::ReplacedExisting));
+        let changes = store.take_changes();
+        assert!(changes.session_cleared);
+        // The caller must delete the row, not write a session built on the old key.
+        assert!(changes.session.is_none());
+        assert_eq!(
+            changes.identity.as_deref(),
+            Some(replacement.serialize().as_ref())
+        );
+    }
+
+    #[test]
+    async fn reports_a_removed_pre_key_without_applying_it() {
+        let mut store = store();
+
+        store.remove_pre_key(PreKeyId::from(7u32)).await.unwrap();
+
+        assert_eq!(store.take_changes().removed_pre_key, Some(7));
+    }
+
+    #[test]
+    async fn refuses_writes_it_cannot_report() {
+        let mut store = store();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+        let record = PreKeyRecord::new(PreKeyId::from(1u32), &KeyPair::generate(&mut rng));
+
+        // Accepting these silently would drop the write when the operation
+        // returns, since the changeset has nowhere to carry it.
+        assert!(
+            store
+                .save_pre_key(PreKeyId::from(1u32), &record)
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    async fn take_changes_drains() {
+        let mut store = store();
+        store.remove_pre_key(PreKeyId::from(3u32)).await.unwrap();
+
+        assert!(store.take_changes().removed_pre_key.is_some());
+        assert!(store.take_changes().removed_pre_key.is_none());
+    }
+}
