@@ -5,6 +5,7 @@ import {
 	GroupCipher,
 	GroupSessionBuilder,
 	hasLogger,
+	importLegacySessionRecordV1,
 	ProtocolAddress,
 	SenderKeyDistributionMessage,
 	SenderKeyName,
@@ -23,6 +24,7 @@ import type {
 	SignalKeyStoreWithTransaction
 } from '../Types'
 import type { SignalRepositoryWithLIDStore } from '../Types/Signal'
+import { generateSignalPubKey } from '../Utils/crypto'
 import { MISSING_KEYS_ERROR_TEXT } from '../Utils/decode-wa-message'
 import type { ILogger } from '../Utils/logger'
 import {
@@ -34,13 +36,8 @@ import {
 	transferDevice,
 	WAJIDDomains
 } from '../WABinary'
-import {
-	hasOpenLegacySession,
-	isLegacySessionEntry,
-	isLegacySessionRecord,
-	legacySessionInfo,
-	pickOpenLegacySession
-} from './legacy-session'
+import { hasOpenLegacySession, isLegacySessionEntry, isLegacySessionRecord, legacySessionInfo } from './legacy-session'
+import { toTypedRecord } from './legacy-session-codec'
 import { LIDMappingStore } from './lid-mapping'
 
 /**
@@ -674,18 +671,25 @@ function signalStorage(
 					return null
 				}
 
-				// Pre-WASM auth states hold the JS libsignal object. Hand the bridge
-				// the OPEN state rather than letting it take `_sessions`' first key,
-				// which after a rotation is a closed one. See ./legacy-session.
+				// Pre-WASM auth states hold the JS libsignal object. Convert it through
+				// the core's typed model, which reconstructs the message-key material
+				// from its seed. The adapter's own field-by-field fallback cannot: it
+				// stores the seed as a cipher key and zeroes the mac/iv, so the very
+				// first ciphertext the old build enciphered fails its MAC.
 				//
-				// With every state closed there is nothing safe to hand over: passing
-				// the record would let the bridge promote a closed state to the
-				// current session, and encrypting under a ratchet the peer already
-				// dropped yields messages nobody can decrypt. Report "no session" so
-				// the session is renegotiated instead.
+				// With every state closed there is nothing safe to hand over — the
+				// converted record would promote a closed state to current, and
+				// encrypting under a ratchet the peer already dropped yields messages
+				// nobody can decrypt. Report "no session" so it renegotiates.
 				if (isLegacySessionRecord(sess)) {
-					const open = pickOpenLegacySession(sess)
-					return open ? (open as unknown as Uint8Array) : null
+					if (!hasOpenLegacySession(sess)) {
+						return null
+					}
+
+					return importLegacySessionRecordV1(toTypedRecord(sess), {
+						identityKey: generateSignalPubKey(creds.signedIdentityKey.public),
+						registrationId: creds.registrationId
+					})
 				}
 
 				return sess

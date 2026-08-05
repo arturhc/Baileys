@@ -1,13 +1,13 @@
 use async_trait::async_trait;
 use base64::prelude::*;
 use js_sys::{Promise, Uint8Array};
-use prost::Message;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_bytes::ByteBuf;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use buffa::{Message as _, MessageField};
 use waproto::whatsapp::{
     RecordStructure, SenderKeyRecordStructure, SenderKeyStateStructure, SessionStructure,
     sender_key_state_structure::{SenderChainKey, SenderMessageKey, SenderSigningKey},
@@ -384,7 +384,7 @@ impl JsStorageAdapter {
             }
         }
 
-        let mut sender_chain_struct = None;
+        let mut sender_chain_struct = MessageField::none();
 
         if let Some((pub_key, priv_key, chain_key, counter, msg_keys)) = sender_chain {
             let mut message_keys_vec = Vec::new();
@@ -397,10 +397,10 @@ impl JsStorageAdapter {
                 });
             }
 
-            sender_chain_struct = Some(Chain {
+            sender_chain_struct = MessageField::some(Chain {
                 sender_ratchet_key: Some(pub_key),
                 sender_ratchet_key_private: Some(priv_key),
-                chain_key: Some(ChainKey {
+                chain_key: MessageField::some(ChainKey {
                     index: Some(counter),
                     key: Some(chain_key.into()),
                 }),
@@ -423,7 +423,7 @@ impl JsStorageAdapter {
             receiver_chains_vec.push(Chain {
                 sender_ratchet_key: Some(sender_ratchet),
                 sender_ratchet_key_private: None,
-                chain_key: Some(ChainKey {
+                chain_key: MessageField::some(ChainKey {
                     index: Some(counter),
                     key: Some(chain_key.into()),
                 }),
@@ -441,8 +441,8 @@ impl JsStorageAdapter {
             previous_counter: Some(previous_counter),
             sender_chain: sender_chain_struct,
             receiver_chains: receiver_chains_vec,
-            pending_key_exchange: None,
-            pending_pre_key: None,
+            pending_key_exchange: MessageField::none(),
+            pending_pre_key: MessageField::none(),
             remote_registration_id: Some(registration_id),
             local_registration_id: Some(local_reg_id),
             needs_refresh: None,
@@ -450,7 +450,7 @@ impl JsStorageAdapter {
         };
 
         let record = RecordStructure {
-            current_session: Some(session),
+            current_session: MessageField::some(session),
             previous_sessions: Vec::new(),
         };
 
@@ -522,8 +522,8 @@ impl JsStorageAdapter {
 
             sender_key_states.push(SenderKeyStateStructure {
                 sender_key_id: Some(sender_key_id),
-                sender_chain_key: Some(chain_key),
-                sender_signing_key: Some(signing_key),
+                sender_chain_key: MessageField::some(chain_key),
+                sender_signing_key: MessageField::some(signing_key),
                 sender_message_keys,
             });
         }

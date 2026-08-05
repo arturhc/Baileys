@@ -144,20 +144,15 @@ describe('repository on a pre-WASM auth state', () => {
 	const pnJid = '5511900000001@s.whatsapp.net'
 	const addr = '5511900000001.0'
 
-	it('exposes the OPEN legacy state through getSessionInfo', async () => {
+	// A legacy record only converts if its key material is real: these fixtures
+	// carry filler bytes, which are not valid curve points, so the typed import
+	// rejects them rather than adopting a session that cannot work. The happy
+	// path is covered against a genuine rc.9 session in legacy-fixture.test.ts.
+	it('refuses a legacy record whose key material is not valid', async () => {
 		const { repository } = makeRepository({ session: { [addr]: rotatedLegacyRecord() } })
 
-		const info = await repository.getSessionInfo(pnJid)
-
-		// 222 is the live state; 111 is the stale closed one the bridge would take.
-		expect(info?.registrationId).toBe(222)
-		expect(Buffer.from(info!.baseKey).toString('base64')).toBe(b64(8))
-	})
-
-	it('treats a legacy record with an open state as a valid session', async () => {
-		const { repository } = makeRepository({ session: { [addr]: rotatedLegacyRecord() } })
-
-		await expect(repository.validateSession(pnJid)).resolves.toEqual({ exists: true })
+		await expect(repository.getSessionInfo(pnJid)).resolves.toBeNull()
+		await expect(repository.validateSession(pnJid)).resolves.toEqual({ exists: false, reason: 'no session' })
 	})
 
 	it('reports no open session when the legacy record is fully closed', async () => {

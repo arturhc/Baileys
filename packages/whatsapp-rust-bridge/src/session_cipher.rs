@@ -99,7 +99,7 @@ impl SessionCipher {
             JsValue::from_str(&msg)
         })?;
 
-        Ok(bytes_to_uint8array(&plaintext))
+        Ok(bytes_to_uint8array(&plaintext.plaintext))
     }
 
     #[wasm_bindgen(js_name = decryptWhisperMessage)]
@@ -131,7 +131,7 @@ impl SessionCipher {
             JsValue::from_str(&msg)
         })?;
 
-        Ok(bytes_to_uint8array(&plaintext))
+        Ok(bytes_to_uint8array(&plaintext.plaintext))
     }
 
     #[wasm_bindgen(js_name = hasOpenSession)]
