@@ -51,6 +51,11 @@ If you are working on the Rust crate:
 # Skip the prebuilt fetch and use your local build instead.
 WHATSAPP_RUST_BRIDGE_SKIP_PREBUILT=1 pnpm install
 pnpm --filter whatsapp-rust-bridge build   # needs cargo, wasm-pack, and wasm-opt
+
+# Rust unit tests. The crate only builds for wasm32, so they run in Node
+# through wasm-pack rather than `cargo test`. `pnpm test` skips them when
+# wasm-pack is absent, so a no-Rust checkout still passes; CI always runs them.
+pnpm --filter whatsapp-rust-bridge test:rust
 ```
 
 A new bridge release goes out by tagging `whatsapp-rust-bridge@<version>` — the `bridge-release.yml` workflow builds, publishes to npm, and opens a follow-up PR refreshing `dist.sha256`.
