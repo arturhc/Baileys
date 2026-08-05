@@ -216,8 +216,16 @@ describe('repository on a pre-WASM auth state', () => {
 		expect(data.session![addr]).toBeDefined()
 	})
 
-	/** Bytes of a real bridge session, exactly as injectE2ESession stores them. */
-	const bridgeSessionBytes = async (jid: string, preKeyId: number): Promise<Uint8Array> => {
+	/**
+	 * Sessions are stored in the legacy shape, so rows are compared by the base
+	 * keys they hold rather than byte-for-byte: that is what identifies the
+	 * session, and it survives the conversion.
+	 */
+	const sessionIdentity = (row: unknown): string[] =>
+		Object.keys((row as { _sessions?: Record<string, unknown> })?._sessions ?? {}).sort()
+
+	/** A real session, exactly as injectE2ESession leaves it in storage. */
+	const bridgeSessionBytes = async (jid: string, preKeyId: number): Promise<unknown> => {
 		const peerCreds = initAuthCreds()
 		const { repository, data } = makeRepository()
 		await repository.injectE2ESession({
@@ -237,8 +245,7 @@ describe('repository on a pre-WASM auth state', () => {
 			}
 		})
 
-		const stored = Object.values(data.session!)[0]
-		return stored as Uint8Array
+		return Object.values(data.session!)[0]
 	}
 
 	it('keeps a live LID session instead of overwriting it with a post-upgrade PN one', async () => {
@@ -259,9 +266,7 @@ describe('repository on a pre-WASM auth state', () => {
 
 		expect(result.migrated).toBe(0)
 		// The LID row must still hold the newer session, byte for byte.
-		expect(Buffer.from(data.session![lidAddr] as Uint8Array).toString('base64')).toBe(
-			Buffer.from(newer).toString('base64')
-		)
+		expect(sessionIdentity(data.session![lidAddr])).toEqual(sessionIdentity(newer))
 		expect(data.session![addr]).toBeDefined()
 	})
 
@@ -312,8 +317,8 @@ describe('repository on a pre-WASM auth state', () => {
 		const result = await repository.migrateSession(pnJid, lidJid)
 
 		expect(result.migrated).toBe(1)
-		expect(Buffer.from(data.session![`18000000000004_${WAJIDDomains.HOSTED_LID}.99`] as Uint8Array)).toEqual(
-			Buffer.from(pnBytes)
+		expect(sessionIdentity(data.session![`18000000000004_${WAJIDDomains.HOSTED_LID}.99`])).toEqual(
+			sessionIdentity(pnBytes)
 		)
 		expect(data.session![plainAddr]).toBeUndefined()
 	})
@@ -334,8 +339,8 @@ describe('repository on a pre-WASM auth state', () => {
 
 		expect(result.migrated).toBe(1)
 		// The hosted row is the shape written today, so it is the one that moves.
-		expect(Buffer.from(data.session![`18000000000005_${WAJIDDomains.HOSTED_LID}.99`] as Uint8Array)).toEqual(
-			Buffer.from(hostedBytes)
+		expect(sessionIdentity(data.session![`18000000000005_${WAJIDDomains.HOSTED_LID}.99`])).toEqual(
+			sessionIdentity(hostedBytes)
 		)
 		expect(data.session![hostedAddr]).toBeUndefined()
 		// The other row is left alone rather than deleted along with it.
@@ -357,8 +362,8 @@ describe('repository on a pre-WASM auth state', () => {
 		const result = await repository.migrateSession(pnJid, lidJid)
 
 		expect(result.migrated).toBe(1)
-		expect(Buffer.from(data.session![`18000000000006_${WAJIDDomains.HOSTED_LID}.99`] as Uint8Array)).toEqual(
-			Buffer.from(liveBytes)
+		expect(sessionIdentity(data.session![`18000000000006_${WAJIDDomains.HOSTED_LID}.99`])).toEqual(
+			sessionIdentity(liveBytes)
 		)
 		expect(data.session![plainAddr]).toBeUndefined()
 		// The closed row is left behind rather than migrated.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals'
 import P from 'pino'
-import { projectLegacySessionRecordV1 } from 'whatsapp-rust-bridge'
+import type { LegacySessionRecord } from '../../Signal/legacy-session'
+import { isLegacySessionRecord } from '../../Signal/legacy-session'
 import { fromTypedRecord, toTypedRecord } from '../../Signal/legacy-session-codec'
 import { makeLibSignalRepository } from '../../Signal/libsignal'
 import type { SignalAuthState, SignalDataSet, SignalDataTypeMap, SignalKeyStore } from '../../Types'
@@ -8,9 +9,9 @@ import { addTransactionCapability } from '../../Utils/auth-utils'
 import fixture from '../fixtures/legacy-session-rc9.json'
 
 /**
- * Going back to a pre-WASM release. Bob upgrades carrying an rc.9 auth state,
- * uses it, and then changes his mind: the session he is now on has to be
- * expressible in the legacy JSON shape the JS libsignal reads.
+ * Going back to a pre-WASM release. Sessions are written in the shape the JS
+ * libsignal reads, so a rollback is swapping the package: there is no
+ * conversion step to get wrong.
  *
  * Sender keys have no such projection. A group key written by this backend
  * cannot be read by the old one, so that limitation is asserted here rather
@@ -70,7 +71,7 @@ const { aliceJid, groupJid } = fixture.jids
 const sessionAddr = '5511900000001.0'
 
 describe('rolling back to a pre-WASM release', () => {
-	it('projects a session this backend advanced into the legacy shape', async () => {
+	it('leaves a session it advanced in the shape the old build reads', async () => {
 		const bob = makeBob()
 
 		// Use the upgraded state the way a running client would.
@@ -84,38 +85,27 @@ describe('rolling back to a pre-WASM release', () => {
 
 		await bob.repository.encryptMessage({ jid: aliceJid, data: Buffer.from('from-new-bob') })
 
-		const projection = projectLegacySessionRecordV1(bob.data.session![sessionAddr] as Uint8Array)
-		// Narrowed by hand: expect() does not tell the compiler which arm this is.
-		if (projection.status !== 'projected') {
-			throw new Error(`not projectable: ${JSON.stringify(projection.issue)}`)
-		}
-
-		const legacy = fromTypedRecord(projection.record)
-		// The shape the JS libsignal expects: a record keyed by base64 index keys.
-		const sessions = legacy._sessions ?? {}
-		expect(Object.keys(sessions).length).toBeGreaterThan(0)
-		for (const entry of Object.values(sessions)) {
+		// No conversion step: the row is already what a pre-WASM release writes,
+		// which is what makes going back a matter of swapping the package.
+		const stored = bob.data.session![sessionAddr] as { _sessions?: Record<string, unknown> }
+		expect(isLegacySessionRecord(stored)).toBe(true)
+		expect(Object.keys(stored._sessions ?? {}).length).toBeGreaterThan(0)
+		for (const entry of Object.values(stored._sessions ?? {})) {
 			expect(entry).toHaveProperty('currentRatchet')
 			expect(entry).toHaveProperty('indexInfo')
 		}
 	})
 
-	it('round-trips the projection back through the bridge unchanged', async () => {
+	it('keeps the stored record stable through the bridge round trip', async () => {
 		const bob = makeBob()
 		await bob.repository.encryptMessage({ jid: aliceJid, data: Buffer.from('one more') })
 
-		const bytes = bob.data.session![sessionAddr] as Uint8Array
-		const projection = projectLegacySessionRecordV1(bytes)
-		if (projection.status !== 'projected') {
-			throw new Error(`not projectable: ${JSON.stringify(projection.issue)}`)
-		}
+		const stored = bob.data.session![sessionAddr] as LegacySessionRecord
+		// legacy JSON -> typed model -> legacy JSON must be stable, or the old
+		// build would read back something we never meant to write.
+		const again = fromTypedRecord(toTypedRecord(stored))
 
-		// Legacy JSON -> typed model -> legacy JSON must be stable, or a rollback
-		// would hand the old build a record it wrote differently than it reads.
-		const legacy = fromTypedRecord(projection.record)
-		const again = fromTypedRecord(toTypedRecord(legacy))
-
-		expect(JSON.stringify(again)).toBe(JSON.stringify(legacy))
+		expect(JSON.stringify(again)).toBe(JSON.stringify(stored))
 	})
 
 	it('leaves a group sender key in a shape the old build cannot read', async () => {

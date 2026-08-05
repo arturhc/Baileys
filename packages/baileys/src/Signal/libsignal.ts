@@ -10,6 +10,7 @@ import {
 	hasLogger,
 	importLegacySessionRecordV1,
 	processBundleWithSnapshot,
+	projectLegacySessionRecordV1,
 	ProtocolAddress,
 	SenderKeyDistributionMessage,
 	SenderKeyName,
@@ -23,6 +24,7 @@ import type {
 	RecordRef,
 	SignalAuthState,
 	SignalDataSet,
+	SignalDataTypeMap,
 	SignalKeyStoreWithRecordTransaction,
 	SignalKeyStoreWithTransaction
 } from '../Types'
@@ -41,7 +43,7 @@ import {
 	WAJIDDomains
 } from '../WABinary'
 import { hasOpenLegacySession, isLegacySessionEntry, isLegacySessionRecord, legacySessionInfo } from './legacy-session'
-import { toTypedRecord } from './legacy-session-codec'
+import { fromTypedRecord, toTypedRecord } from './legacy-session-codec'
 import { LIDMappingStore } from './lid-mapping'
 
 /**
@@ -103,6 +105,13 @@ function normalizeDecryptError(error: unknown): Error {
 
 	return asError(error)
 }
+
+/**
+ * What the bridge's v1 import accepts per chain. Mirrors MAX_MESSAGE_KEYS in the
+ * core: the engine prunes above that plus a threshold, so a live session can
+ * legitimately sit above it for a while.
+ */
+const MAX_LEGACY_MESSAGE_KEYS = 2000
 
 /** Does a stored session row — bridge bytes or a pre-WASM record — hold a live state? */
 function hasOpenSession(stored: Uint8Array | undefined): boolean {
@@ -254,6 +263,37 @@ export function makeLibSignalRepository(
 		)
 	}
 
+	/**
+	 * Sessions are stored in the shape a pre-WASM release wrote them, so this
+	 * branch does not change what is on disk. A record the v1 model cannot
+	 * express keeps its bridge bytes: `readSessionBytes` accepts both, so the
+	 * fallback costs compatibility with an older release for that one row
+	 * rather than failing the operation.
+	 */
+	const toStoredSession = (wireJid: string, session: Uint8Array): SignalDataTypeMap['session'] => {
+		const projection = projectLegacySessionRecordV1(session)
+		if (projection.status !== 'projected') {
+			logger.warn(
+				{ wireJid, issue: projection.issue },
+				'session not expressible in the legacy shape, storing bridge bytes'
+			)
+			return session
+		}
+
+		// The projection does not bound the skipped-key count but the import
+		// does, so a chain that grew past the limit would write cleanly and fail
+		// to load. Keep those as bytes rather than storing a row we cannot read.
+		const overflowing = projection.record.sessions.some(indexed =>
+			indexed.session.chains.some(chain => chain.messageKeys.length > MAX_LEGACY_MESSAGE_KEYS)
+		)
+		if (overflowing) {
+			logger.warn({ wireJid }, 'session holds more skipped keys than the legacy shape accepts, storing bridge bytes')
+			return session
+		}
+
+		return fromTypedRecord(projection.record) as unknown as SignalDataTypeMap['session']
+	}
+
 	/** Pre-WASM records are converted on read; bridge records pass straight through. */
 	const readSessionBytes = async (stored: unknown): Promise<Uint8Array | undefined> => {
 		if (!stored) return undefined
@@ -279,7 +319,7 @@ export function makeLibSignalRepository(
 		if (changes.sessionCleared) {
 			update.session = { [wireJid]: null }
 		} else if (changes.session) {
-			update.session = { [wireJid]: changes.session }
+			update.session = { [wireJid]: toStoredSession(wireJid, changes.session) }
 		}
 
 		if (changes.identity) {
