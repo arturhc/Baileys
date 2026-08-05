@@ -201,8 +201,8 @@ export const extractDeviceJids = (
 				((myUser !== user && myLid !== user) || myDevice !== device) && // either different user or if me user, not this device
 				(device === 0 || !!keyIndex) // ensure that "key-index" is specified for "non-zero" devices, produces a bad req otherwise
 			) {
-				// Scoped per device: hoisting this out of the loop let one hosted
-				// device rewrite the domain for every later device in the same list.
+				// Per device on purpose: one shared variable let a hosted device
+				// leave the domain rewritten for every device listed after it.
 				let domainType = userDomainType
 				// Device 99 must always be on the hosted domain. An already-hosted
 				// LID stays on the LID side: mapping it to plain HOSTED would move
