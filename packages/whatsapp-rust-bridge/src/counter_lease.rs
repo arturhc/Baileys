@@ -17,6 +17,13 @@
 //! Route every record through here rather than calling the core directly: a
 //! path that forgets goes back to leasing without failing, and the only symptom
 //! is skipped keys piling up somewhere else.
+//!
+//! Records are waived on the way out as well as on the way in. A record the
+//! protocol built for itself never passed a load, so the store path is the only
+//! place that sees it before it is serialized and cached. No such record can
+//! reach a send today, because the builders and the ciphers hold separate
+//! adapters and therefore separate caches, but that is a property of the call
+//! sites rather than of this policy.
 
 use wacore_libsignal::protocol::error::Result as SignalResult;
 use wacore_libsignal::protocol::{SenderKeyRecord, SessionRecord};

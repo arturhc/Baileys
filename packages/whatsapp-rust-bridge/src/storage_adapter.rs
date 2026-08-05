@@ -881,6 +881,10 @@ impl SessionStore for JsStorageAdapter {
     ) -> SignalResult<()> {
         let address_str = self.get_address_string(address);
 
+        // Before serializing: a record the protocol built for itself never
+        // passed the load path, and neither the row nor the cache should carry
+        // a reservation this crate does not honour.
+        let record = crate::counter_lease::waive_session(record);
         let bytes = record.serialize()?;
 
         let result = if self.has_store_session_raw() {
@@ -1171,6 +1175,8 @@ impl SenderKeyStore for JsStorageAdapter {
     ) -> SignalResult<()> {
         let key_id = self.get_sender_key_id(sender_key_name);
 
+        // Mirror of the note in `store_session`.
+        let record = crate::counter_lease::waive_sender_key(record)?;
         let bytes = record.serialize()?;
         let uint8 = Uint8Array::from(bytes.as_slice());
 

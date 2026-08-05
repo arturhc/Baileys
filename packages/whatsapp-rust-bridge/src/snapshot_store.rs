@@ -116,6 +116,9 @@ impl SessionStore for SnapshotStore {
         _address: &ProtocolAddress,
         record: SessionRecord,
     ) -> SignalResult<()> {
+        // A record the protocol built for itself never passed `with_session`,
+        // so this is the only place that sees it before it is serialized.
+        let record = crate::counter_lease::waive_session(record);
         let bytes = record.serialize()?;
         let mut inner = self.inner.borrow_mut();
         inner.changes.session = Some(bytes);
@@ -253,6 +256,8 @@ impl SenderKeyStore for SnapshotStore {
         _sender_key_name: &CoreSenderKeyName,
         record: SenderKeyRecord,
     ) -> SignalResult<()> {
+        // Mirror of the note in `store_session`.
+        let record = crate::counter_lease::waive_sender_key(record)?;
         let bytes = record.serialize()?;
         let mut inner = self.inner.borrow_mut();
         inner.changes.sender_key = Some(bytes);

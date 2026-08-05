@@ -110,7 +110,16 @@ describe('group sender keys', () => {
 		// leave the record with empty keys and fail far from here.
 		const [key] = Object.keys(bob.data['sender-key']!)
 		const states = JSON.parse(Buffer.from(bob.data['sender-key']![key!] as Uint8Array).toString())
-		bob.data['sender-key']![key!] = Buffer.from(JSON.stringify(states, BufferJSON.replacer))
+		const rewritten = JSON.stringify(states, BufferJSON.replacer)
+		bob.data['sender-key']![key!] = Buffer.from(rewritten)
+
+		// The replacer also rewrites a { type: 'Buffer', data: [...] } object,
+		// which is what JSON.parse leaves behind, so pin the shape rather than
+		// trusting that it produced one.
+		expect(JSON.parse(rewritten)[0].senderChainKey.seed).toEqual({
+			type: 'Buffer',
+			data: expect.any(String)
+		})
 
 		const sent = await alice.repository.encryptGroupMessage({
 			group: groupJid,
