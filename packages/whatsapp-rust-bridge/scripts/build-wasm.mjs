@@ -70,7 +70,15 @@ function wasmBindgen() {
 		}
 	}
 
-	return 'wasm-bindgen'
+	// Falling through to a global wasm-bindgen is worse than stopping: it is
+	// almost never the version the crate was linked against, and the failure it
+	// produces talks about schema numbers rather than what to do about it.
+	throw new Error(
+		`no wasm-bindgen ${wanted ?? '(version unknown)'} in ${cacheRoot}. ` +
+			'Run `pnpm build` once so wasm-pack downloads the matching CLI, or ' +
+			`install it with \`cargo install wasm-bindgen-cli --version ${wanted ?? 'X.Y.Z'}\` ` +
+			'and put it on PATH.'
+	)
 }
 
 function build(variant) {

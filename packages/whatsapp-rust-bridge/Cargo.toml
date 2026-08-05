@@ -115,10 +115,8 @@ web-sys = { version = "0.3", features = [
 wasm-bindgen-test = "0.3"
 
 # Keeps the name section and debug info so a CPU profile shows real symbols
-# instead of wasm-function[N]. Used by `pnpm build:profile`, never by a release.
-[package.metadata.wasm-pack.profile.profiling]
-wasm-opt = false
-
+# instead of wasm-function[N]. `pnpm build:profile` selects it through cargo
+# directly, since wasm-pack's own --profiling still builds the release profile.
 [profile.profiling]
 inherits = "release"
 debug = 2
