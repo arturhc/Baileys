@@ -4,7 +4,6 @@ use bytes::Bytes;
 use js_sys::Uint8Array;
 use serde::{Deserialize, Serialize};
 use tsify::Tsify;
-use wasm_bindgen::prelude::*;
 use wacore_libsignal::protocol::{
     IdentityKey, LegacyIndexedSessionV1 as CoreIndexedSession,
     LegacySessionBaseKeyRoleV1 as CoreBaseKeyRole, LegacySessionChainCounterV1 as CoreChainCounter,
@@ -17,6 +16,7 @@ use wacore_libsignal::protocol::{
     LegacySessionUnrepresentableFieldV1 as CoreUnrepresentableField,
     LegacySessionV1 as CoreSession, SessionRecord,
 };
+use wasm_bindgen::prelude::*;
 
 fn byte_array(bytes: &[u8]) -> Uint8Array {
     Uint8Array::from(bytes)
@@ -289,9 +289,7 @@ impl From<CoreKeyPair> for LegacySessionKeyPairV1 {
     }
 }
 
-impl TryFrom<LegacySessionIndexV1>
-    for wacore_libsignal::protocol::LegacySessionIndexV1
-{
+impl TryFrom<LegacySessionIndexV1> for wacore_libsignal::protocol::LegacySessionIndexV1 {
     type Error = CoreInteropError;
 
     fn try_from(value: LegacySessionIndexV1) -> Result<Self, Self::Error> {
@@ -306,9 +304,7 @@ impl TryFrom<LegacySessionIndexV1>
     }
 }
 
-impl From<wacore_libsignal::protocol::LegacySessionIndexV1>
-    for LegacySessionIndexV1
-{
+impl From<wacore_libsignal::protocol::LegacySessionIndexV1> for LegacySessionIndexV1 {
     fn from(value: wacore_libsignal::protocol::LegacySessionIndexV1) -> Self {
         Self {
             base_key: value.base_key.into(),
@@ -448,8 +444,9 @@ pub fn import_legacy_session_record_v1(
     record: LegacySessionRecordV1,
     context: LegacySessionLocalContext,
 ) -> Result<Uint8Array, JsValue> {
-    let identity_key = IdentityKey::decode(&context.identity_key)
-        .map_err(|error| JsValue::from_str(&format!("{}: {}", "context.identityKey", error.to_string())))?;
+    let identity_key = IdentityKey::decode(&context.identity_key).map_err(|error| {
+        JsValue::from_str(&format!("{}: {}", "context.identityKey", error.to_string()))
+    })?;
     let record = CoreRecord::try_from(record)
         .map_err(|error| JsValue::from_str(&format!("{}: {}", "record", error.to_string())))?;
     let record = record
@@ -459,7 +456,9 @@ pub fn import_legacy_session_record_v1(
         })
         .map_err(|error| JsValue::from_str(&format!("{}: {}", "record", error.to_string())))?;
     let bytes = record.serialize().map_err(|error| {
-        JsValue::from_str(&format!("serialize imported legacy session record: {error}"))
+        JsValue::from_str(&format!(
+            "serialize imported legacy session record: {error}"
+        ))
     })?;
     Ok(byte_array(&bytes))
 }
@@ -476,7 +475,11 @@ pub fn project_legacy_session_record_v1(
         }),
         Err(error) => match projection_issue(error) {
             Ok(issue) => Ok(LegacySessionProjectionV1::Unrepresentable { issue }),
-            Err(error) => Err(JsValue::from_str(&format!("{}: {}", "recordBytes", error.to_string()))),
+            Err(error) => Err(JsValue::from_str(&format!(
+                "{}: {}",
+                "recordBytes",
+                error.to_string()
+            ))),
         },
     }
 }

@@ -100,17 +100,14 @@ impl SessionCipher {
         })?;
 
         // The core reports the one-time key it consumed rather than deleting it,
-        // so this path has to do the delete itself — otherwise a spent pre-key
-        // stays in storage and can be handed out again.
-        if let Some(id) = plaintext.consumed_prekey_id {
-            PreKeyStore::remove_pre_key(&mut prekey_store, id)
-                .await
-                .map_err(|e| {
-                    JsValue::from_str(&format!(
-                        "SessionCipher.decryptPreKeyWhisperMessage failed to remove pre-key: {:?}",
-                        e
-                    ))
-                })?;
+        // so this path has to do the delete itself, or a spent pre-key stays in
+        // storage and can be handed out again. The message is already decrypted
+        // at this point, so a storage failure here is logged rather than raised:
+        // dropping the plaintext would lose a message to a cleanup problem.
+        if let Some(id) = plaintext.consumed_prekey_id
+            && let Err(e) = PreKeyStore::remove_pre_key(&mut prekey_store, id).await
+        {
+            log::warn!("failed to remove consumed pre-key {:?}: {:?}", id, e);
         }
 
         Ok(bytes_to_uint8array(&plaintext.plaintext))

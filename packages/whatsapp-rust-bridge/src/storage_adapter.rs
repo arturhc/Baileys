@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use base64::prelude::*;
+use buffa::{Message as _, MessageField};
 use js_sys::{Promise, Uint8Array};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -7,7 +8,6 @@ use serde_bytes::ByteBuf;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use buffa::{Message as _, MessageField};
 use waproto::whatsapp::{
     RecordStructure, SenderKeyRecordStructure, SenderKeyStateStructure, SessionStructure,
     sender_key_state_structure::{SenderChainKey, SenderMessageKey, SenderSigningKey},
@@ -20,10 +20,10 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use wacore_libsignal::protocol::{
-    self as libsignal, Direction as StoreDirection, GenericSignedPreKey as _, IdentityChange,
-    IdentityKey, IdentityKeyPair, IdentityKeyStore, KeyPair, PreKeyId, PreKeyRecord, PreKeyStore,
-    PrivateKey, SenderKeyStore, SessionStore, SignedPreKeyId, SignedPreKeyRecord,
-    SignedPreKeyStore,
+    self as libsignal, DeviceId, Direction as StoreDirection, GenericSignedPreKey as _,
+    IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, KeyPair, PreKeyId,
+    PreKeyRecord, PreKeyStore, PrivateKey, SenderKeyStore, SessionStore, SignedPreKeyId,
+    SignedPreKeyRecord, SignedPreKeyStore,
 };
 type SignalResult<T> = wacore_libsignal::protocol::error::Result<T>;
 
@@ -129,7 +129,7 @@ pub struct JsStorageAdapter {
     cached_sender_keys: Rc<RefCell<HashMap<String, CoreSenderKeyRecord>>>,
     cached_identities: Rc<RefCell<HashMap<String, Vec<u8>>>>,
     has_store_session_raw: Rc<RefCell<Option<bool>>>,
-    last_address_cache: Rc<RefCell<Option<(String, String)>>>,
+    last_address_cache: Rc<RefCell<Option<(String, DeviceId, String)>>>,
     last_sender_key_cache: Rc<RefCell<Option<(String, String, String)>>>,
 }
 
@@ -197,10 +197,15 @@ impl JsStorageAdapter {
 
     #[inline]
     fn get_address_string(&self, address: &libsignal::ProtocolAddress) -> String {
+        // Two devices of one user share a name, so the device id has to be part
+        // of the key: matching on the name alone would hand back another
+        // device's address.
         let name = address.name();
+        let device = address.device_id();
         let cache = self.last_address_cache.borrow();
-        if let Some((cached_name, cached_str)) = cache.as_ref()
+        if let Some((cached_name, cached_device, cached_str)) = cache.as_ref()
             && cached_name == name
+            && *cached_device == device
         {
             return cached_str.clone();
         }
@@ -209,7 +214,7 @@ impl JsStorageAdapter {
         let addr_str = address.to_string();
         self.last_address_cache
             .borrow_mut()
-            .replace((name.to_string(), addr_str.clone()));
+            .replace((name.to_string(), device, addr_str.clone()));
         addr_str
     }
 
@@ -957,6 +962,11 @@ impl IdentityKeyStore for JsStorageAdapter {
         Ok(trusted)
     }
 
+    // Identity rows are keyed by the full address, matching their session. A
+    // pre-fix store holds them under the bare user, and those rows are simply
+    // left behind: they are not read again, and re-learning an identity is
+    // harmless under trust-on-first-use, whereas deleting rows on upgrade risks
+    // dropping one that is still in use.
     async fn save_identity(
         &mut self,
         address: &libsignal::ProtocolAddress,

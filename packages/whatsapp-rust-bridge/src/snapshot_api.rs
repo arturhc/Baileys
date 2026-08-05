@@ -16,10 +16,10 @@ use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 use wacore_libsignal::protocol::{
-    GenericSignedPreKey as _, PreKeyBundle, PublicKey as CorePublicKey, process_prekey_bundle, IdentityKey, IdentityKeyPair, KeyPair, PreKeyId, PreKeyRecord,
-    PreKeySignalMessage, PrivateKey, SenderKeyRecord, SessionRecord, SignalMessage, SignedPreKeyId,
-    SignedPreKeyRecord, Timestamp, UsePQRatchet, message_decrypt_prekey, message_decrypt_signal,
-    message_encrypt,
+    GenericSignedPreKey as _, IdentityKey, IdentityKeyPair, KeyPair, PreKeyBundle, PreKeyId,
+    PreKeyRecord, PreKeySignalMessage, PrivateKey, PublicKey as CorePublicKey, SenderKeyRecord,
+    SessionRecord, SignalMessage, SignedPreKeyId, SignedPreKeyRecord, Timestamp, UsePQRatchet,
+    message_decrypt_prekey, message_decrypt_signal, message_encrypt, process_prekey_bundle,
 };
 
 use crate::protocol_address::ProtocolAddress;
@@ -229,7 +229,7 @@ pub async fn decrypt_whisper_with_snapshot(
         &mut rand::make_rng::<StdRng>(),
     )
     .await
-        .map_err(|e| err("decryptWhisper failed", format!("{e:?}")))?;
+    .map_err(|e| err("decryptWhisper failed", format!("{e:?}")))?;
 
     Ok(DecryptOutput {
         plaintext: serde_bytes::ByteBuf::from(result.plaintext),
@@ -266,9 +266,13 @@ pub async fn decrypt_prekey_with_snapshot(
     .map_err(|e| err("decryptPreKey failed", format!("{e:?}")))?;
 
     // The core reports the consumed pre-key instead of deleting it, so the
-    // caller can drop it in the same write that makes the session durable.
+    // caller can drop it in the same write that makes the session durable. Only
+    // overwrite when it names one: the store records the same effect if the
+    // core ever removes the key itself, and that must not be dropped here.
     let mut changes: SignalChanges = store.take_changes().into();
-    changes.removed_pre_key_id = result.consumed_prekey_id.map(u32::from);
+    if let Some(id) = result.consumed_prekey_id {
+        changes.removed_pre_key_id = Some(u32::from(id));
+    }
 
     Ok(DecryptOutput {
         plaintext: serde_bytes::ByteBuf::from(result.plaintext),
@@ -300,7 +304,6 @@ pub async fn encrypt_with_snapshot(
         changes: store.take_changes().into(),
     })
 }
-
 
 /// A peer's published bundle, as the server hands it over.
 #[derive(Deserialize, Tsify)]

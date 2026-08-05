@@ -99,7 +99,10 @@ impl SnapshotStore {
 
 #[async_trait(?Send)]
 impl SessionStore for SnapshotStore {
-    async fn load_session(&self, _address: &ProtocolAddress) -> SignalResult<Option<SessionRecord>> {
+    async fn load_session(
+        &self,
+        _address: &ProtocolAddress,
+    ) -> SignalResult<Option<SessionRecord>> {
         Ok(self.inner.borrow().session.clone())
     }
 
@@ -186,14 +189,18 @@ impl PreKeyStore for SnapshotStore {
 
     async fn save_pre_key(
         &mut self,
-        prekey_id: PreKeyId,
-        record: &PreKeyRecord,
+        _prekey_id: PreKeyId,
+        _record: &PreKeyRecord,
     ) -> SignalResult<()> {
-        self.inner
-            .borrow_mut()
-            .pre_keys
-            .insert(u32::from(prekey_id), record.clone());
-        Ok(())
+        // The changeset has no slot for a written pre-key, because the core only
+        // calls this from its own tests. Storing it in the snapshot would drop
+        // the write silently when the operation returns, so refuse instead: if
+        // the core ever starts using it, this fails loudly rather than losing a
+        // key the caller was never told to persist.
+        Err(SignalProtocolError::InvalidState(
+            "save_pre_key",
+            "the snapshot store cannot report a written pre-key".to_owned(),
+        ))
     }
 
     async fn remove_pre_key(&mut self, prekey_id: PreKeyId) -> SignalResult<()> {
@@ -221,14 +228,14 @@ impl SignedPreKeyStore for SnapshotStore {
 
     async fn save_signed_pre_key(
         &mut self,
-        id: SignedPreKeyId,
-        record: &SignedPreKeyRecord,
+        _id: SignedPreKeyId,
+        _record: &SignedPreKeyRecord,
     ) -> SignalResult<()> {
-        self.inner
-            .borrow_mut()
-            .signed_pre_keys
-            .insert(u32::from(id), record.clone());
-        Ok(())
+        // Same reasoning as save_pre_key above.
+        Err(SignalProtocolError::InvalidState(
+            "save_signed_pre_key",
+            "the snapshot store cannot report a written signed pre-key".to_owned(),
+        ))
     }
 }
 

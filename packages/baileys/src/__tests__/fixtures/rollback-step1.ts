@@ -94,8 +94,13 @@ const main = async () => {
 		throw new Error(`session is not projectable: ${JSON.stringify(projection.issue)}`)
 	}
 
+	const outputPath = process.argv[2]
+	if (!outputPath) {
+		throw new Error('usage: rollback-step1 <output-path>')
+	}
+
 	writeFileSync(
-		process.argv[2]!,
+		outputPath,
 		JSON.stringify({
 			outgoing: { type: outgoing.type, ct: Buffer.from(outgoing.ciphertext).toString('base64') },
 			projectedSession: fromTypedRecord(projection.record),
