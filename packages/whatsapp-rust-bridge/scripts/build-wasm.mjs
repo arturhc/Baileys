@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { delimiter, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -59,14 +59,31 @@ function wasmBindgen() {
 		/name = "wasm-bindgen"\nversion = "([^"]+)"/
 	)?.[1]
 
+	const matches = candidate => {
+		if (!existsSync(candidate)) return false
+
+		const version = spawnSync(candidate, ['--version'], { encoding: 'utf8' }).stdout?.trim()
+		return Boolean(wanted) && Boolean(version?.endsWith(wanted))
+	}
+
 	const cacheRoot = resolve(process.env.HOME ?? '', '.cache/.wasm-pack')
 	if (wanted && existsSync(cacheRoot)) {
 		for (const entry of readdirSync(cacheRoot)) {
 			const candidate = resolve(cacheRoot, entry, 'wasm-bindgen')
-			if (!existsSync(candidate)) continue
+			if (matches(candidate)) return candidate
+		}
+	}
 
-			const version = spawnSync(candidate, ['--version'], { encoding: 'utf8' }).stdout?.trim()
-			if (version?.endsWith(wanted)) return candidate
+	// Then PATH, which is the other remedy the error below names. Only an exact
+	// version match is accepted, so this cannot silently reintroduce the schema
+	// mismatch that made the cache the first choice.
+	const extensions = process.platform === 'win32' ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';') : ['']
+	for (const directory of (process.env.PATH ?? '').split(delimiter)) {
+		if (!directory) continue
+
+		for (const extension of extensions) {
+			const candidate = resolve(directory, `wasm-bindgen${extension}`)
+			if (matches(candidate)) return candidate
 		}
 	}
 
@@ -74,7 +91,7 @@ function wasmBindgen() {
 	// almost never the version the crate was linked against, and the failure it
 	// produces talks about schema numbers rather than what to do about it.
 	throw new Error(
-		`no wasm-bindgen ${wanted ?? '(version unknown)'} in ${cacheRoot}. ` +
+		`no wasm-bindgen ${wanted ?? '(version unknown)'} in ${cacheRoot} or on PATH. ` +
 			'Run `pnpm build` once so wasm-pack downloads the matching CLI, or ' +
 			`install it with \`cargo install wasm-bindgen-cli --version ${wanted ?? 'X.Y.Z'}\` ` +
 			'and put it on PATH.'
