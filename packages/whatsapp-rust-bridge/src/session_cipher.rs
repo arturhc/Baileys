@@ -7,7 +7,7 @@ use crate::{
     protocol_address::ProtocolAddress,
     storage_adapter::{JsStorageAdapter, SignalStorage},
 };
-use wacore_libsignal::protocol::{self as libsignal, SessionStore, UsePQRatchet};
+use wacore_libsignal::protocol::{self as libsignal, PreKeyStore, SessionStore, UsePQRatchet};
 
 #[inline]
 fn bytes_to_uint8array(bytes: &[u8]) -> Uint8Array {
@@ -98,6 +98,20 @@ impl SessionCipher {
             let msg = format!("SessionCipher.decryptPreKeyWhisperMessage failed: {:?}", e);
             JsValue::from_str(&msg)
         })?;
+
+        // The core reports the one-time key it consumed rather than deleting it,
+        // so this path has to do the delete itself — otherwise a spent pre-key
+        // stays in storage and can be handed out again.
+        if let Some(id) = plaintext.consumed_prekey_id {
+            PreKeyStore::remove_pre_key(&mut prekey_store, id)
+                .await
+                .map_err(|e| {
+                    JsValue::from_str(&format!(
+                        "SessionCipher.decryptPreKeyWhisperMessage failed to remove pre-key: {:?}",
+                        e
+                    ))
+                })?;
+        }
 
         Ok(bytes_to_uint8array(&plaintext.plaintext))
     }
