@@ -73,7 +73,11 @@ runs:
           exit 0
         fi
 
-        if printf '%s\n' "$files" | grep -qE '^packages/whatsapp-rust-bridge/'; then
+        # A here-string, not a pipe: grep -q exits at the first match, and a
+        # writer still filling the pipe would take SIGPIPE, which under pipefail
+        # fails the condition and quietly selects the prebuilt on exactly the
+        # large pull requests that most need the source build.
+        if grep -qE '^packages/whatsapp-rust-bridge/' <<< "$files"; then
           echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "Bridge touched; building it from source."
         else
