@@ -220,12 +220,12 @@ boxplot(() => {
     bench("Encrypt typical message (Rust WASM)", async () => {
       const result = await encWasm.alice.encrypt(typicalMessage);
       do_not_optimize(result);
-    }).gc("inner");
+    });
 
     bench("Encrypt typical message (libsignal-node)", async () => {
       const result = await encLib.alice.encrypt(typicalMessage);
       do_not_optimize(result);
-    }).gc("inner");
+    });
   });
 });
 
@@ -249,7 +249,7 @@ boxplot(() => {
           do_not_optimize(result);
         },
       };
-    }).gc("inner");
+    });
 
     bench("Decrypt WhisperMessage (libsignal-node)", function* () {
       yield {
@@ -261,7 +261,7 @@ boxplot(() => {
           do_not_optimize(result);
         },
       };
-    }).gc("inner");
+    });
   });
 });
 
@@ -282,7 +282,7 @@ boxplot(() => {
       );
       do_not_optimize(decryptedByBob);
       do_not_optimize(decryptedByAlice);
-    }).gc("inner");
+    });
 
     bench("Full round-trip encrypt+decrypt (libsignal-node)", async () => {
       const toBob = await rtLib.alice.encrypt(typicalMessage);
@@ -295,7 +295,7 @@ boxplot(() => {
       );
       do_not_optimize(decryptedByBob);
       do_not_optimize(decryptedByAlice);
-    }).gc("inner");
+    });
   });
 });
 
