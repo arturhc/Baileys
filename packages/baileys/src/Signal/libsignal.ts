@@ -1,17 +1,19 @@
 import { Boom } from '@hapi/boom'
 import { LRUCache } from 'lru-cache'
-import type { SignalStorage } from 'whatsapp-rust-bridge'
+import type { SignalChanges, SignalSnapshot, SignalStorage } from 'whatsapp-rust-bridge'
 import {
+	decryptPreKeyWithSnapshot,
+	decryptWhisperWithSnapshot,
+	encryptWithSnapshot,
 	GroupCipher,
 	GroupSessionBuilder,
 	hasLogger,
 	importLegacySessionRecordV1,
+	processBundleWithSnapshot,
 	ProtocolAddress,
 	SenderKeyDistributionMessage,
 	SenderKeyName,
 	SenderKeyRecord,
-	SessionBuilder,
-	SessionCipher,
 	SessionRecord,
 	setLogger
 } from 'whatsapp-rust-bridge'
@@ -20,6 +22,7 @@ import type {
 	LIDMapping,
 	RecordRef,
 	SignalAuthState,
+	SignalDataSet,
 	SignalKeyStoreWithRecordTransaction,
 	SignalKeyStoreWithTransaction
 } from '../Types'
@@ -72,6 +75,18 @@ async function resolveSignalAddressId(id: string, lidMapping: LIDMappingStore): 
 }
 
 /**
+ * The bridge rejects with plain strings. Callers match on `.message` and log
+ * `err.stack`, so hand them a real Error while keeping the text intact.
+ */
+function asError(error: unknown): Error {
+	if (error instanceof Error) {
+		return error
+	}
+
+	return new Error(typeof error === 'string' ? error : String(error))
+}
+
+/**
  * The JS libsignal reported an already-consumed message key as
  * `MISSING_KEYS_ERROR_TEXT`, which the receive path matches to ACK the stanza
  * (487) instead of asking the peer to resend. The bridge rejects the same case
@@ -79,13 +94,13 @@ async function resolveSignalAddressId(id: string, lidMapping: LIDMappingStore): 
  * strings, not Errors — so map it back onto the text messages-recv understands.
  * Without this a redelivered ciphertext drives a pointless retry/resend loop.
  */
-function normalizeDecryptError(error: unknown): unknown {
+function normalizeDecryptError(error: unknown): Error {
 	const message = typeof error === 'string' ? error : error instanceof Error ? error.message : ''
 	if (message.includes('DuplicatedMessage')) {
 		return new Boom(MISSING_KEYS_ERROR_TEXT, { data: { cause: message } })
 	}
 
-	return error
+	return asError(error)
 }
 
 /** Does a stored session row — bridge bytes or a pre-WASM record — hold a live state? */
@@ -105,28 +120,16 @@ function hasOpenSession(stored: Uint8Array | undefined): boolean {
 	}
 }
 
-/** Extract identity key from PreKeyWhisperMessage for identity change detection */
-function extractIdentityFromPkmsg(ciphertext: Uint8Array): Uint8Array | undefined {
+/**
+ * The one-time pre-key a prekey message will consume, read from its header so
+ * the caller can put it in the snapshot instead of the operation fetching it.
+ */
+function preKeyIdsFrom(ciphertext: Uint8Array): number[] {
 	try {
-		if (!ciphertext || ciphertext.length < 2) {
-			return undefined
-		}
-
-		// Version byte check (version 3)
-		const version = ciphertext[0]!
-		if ((version & 0xf) !== 3) {
-			return undefined
-		}
-
-		// Parse protobuf (skip version byte)
-		const preKeyProto = proto.PreKeySignalMessage.decode(ciphertext.slice(1))
-		if (preKeyProto.identityKey?.length === 33) {
-			return new Uint8Array(preKeyProto.identityKey)
-		}
-
-		return undefined
+		const parsed = proto.PreKeySignalMessage.decode(ciphertext.slice(1))
+		return typeof parsed.preKeyId === 'number' ? [parsed.preKeyId] : []
 	} catch {
-		return undefined
+		return []
 	}
 }
 
@@ -144,28 +147,11 @@ export function makeLibSignalRepository(
 	// Bound delegate so repository methods can pre-resolve before acquiring locks.
 	const resolveLIDSignalAddress = (id: string) => resolveSignalAddressId(id, lidMapping)
 
-	/**
-	 * Build a per-call `signalStorage` instance whose resolver returns
-	 * `wireJid` for `rawAddr` (and falls through to the standard `lidMapping`
-	 * lookup for any other id libsignal might pass — e.g. the participant
-	 * field on a sender-key operation, which is not the one we pre-resolved).
-	 *
-	 * This is what closes the TOCTOU on resolved-address divergence: the
-	 * outer transactWith locks on `wireJid`, and every storage call libsignal
-	 * makes inside that scope uses the SAME `wireJid` for the row it
-	 * reads/writes — no independent re-resolution that could land on a
-	 * different row if the mapping changed mid-flight.
-	 */
-	const pinResolutionForStorage = (rawAddr: string, wireJid: string) =>
-		signalStorage(auth, lidMapping, async (id: string) => {
-			if (id === rawAddr) return wireJid
-			return resolveSignalAddressId(id, lidMapping)
-		})
-
 	// Baileys' `addTransactionCapability` returns a store with `transactWith`
 	// implemented; narrow to the record-transaction variant so the internal
 	// call sites don't have to null-check the (publicly optional) method.
 	const parsedKeys = auth.keys as SignalKeyStoreWithRecordTransaction
+	const { creds } = auth
 	const migratedSessionCache = new LRUCache<string, true>({
 		ttl: 3 * 24 * 60 * 60 * 1000, // 3 days
 		ttlAutopurge: true,
@@ -182,6 +168,118 @@ export function makeLibSignalRepository(
 
 		const skdm = await new GroupSessionBuilder(storage).create(senderName)
 		return { senderName, skdm }
+	}
+
+	/**
+	 * Runs one Signal operation over the peer's session.
+	 *
+	 * The backend gets a snapshot and hands back a changeset, so the operation
+	 * never calls into this store while it runs. That is what lets a single lock
+	 * on the session record be enough: there is no nested scope to acquire a
+	 * second record, and therefore no pair of scopes that can take the same two
+	 * records in opposite orders.
+	 *
+	 * Everything the operation reported lands in one `set`, so a crash cannot
+	 * leave the pre-key deleted while the session it belongs to is still the old
+	 * one.
+	 */
+	const withSession = async <T>(
+		jid: string,
+		run: (snapshot: SignalSnapshot, address: ProtocolAddress) => Promise<{ changes: SignalChanges } & T>,
+		extra?: { preKeyIds?: number[] }
+	): Promise<T> => {
+		const address = jidToSignalProtocolAddress(jid)
+		const wireJid = await resolveLIDSignalAddress(address.toString())
+
+		return parsedKeys.transactWith({ records: [{ type: 'session', id: wireJid }] }, async () => {
+			const [sessions, identities] = await Promise.all([
+				parsedKeys.get('session', [wireJid]),
+				parsedKeys.get('identity-key', [wireJid])
+			])
+
+			const preKeys: SignalSnapshot['preKeys'] = []
+			for (const id of extra?.preKeyIds ?? []) {
+				const { [id]: stored } = await parsedKeys.get('pre-key', [String(id)])
+				if (stored) {
+					preKeys.push({ id, keyPair: { public: stored.public, private: stored.private } })
+				}
+			}
+
+			const snapshot: SignalSnapshot = {
+				identity: {
+					public: creds.signedIdentityKey.public,
+					private: creds.signedIdentityKey.private
+				},
+				registrationId: creds.registrationId,
+				session: await readSessionBytes(sessions[wireJid]),
+				peerIdentity: identities[wireJid],
+				preKeys,
+				signedPreKeys: [
+					{
+						id: creds.signedPreKey.keyId,
+						keyPair: {
+							public: creds.signedPreKey.keyPair.public,
+							private: creds.signedPreKey.keyPair.private
+						},
+						signature: creds.signedPreKey.signature
+					}
+				]
+			}
+
+			let result: { changes: SignalChanges } & T
+			try {
+				result = await run(snapshot, address)
+			} catch (error) {
+				// Nothing was written yet, so a failure leaves storage exactly as
+				// it was found — no half-applied session.
+				throw asError(error)
+			}
+
+			const { changes, ...rest } = result
+			await applyChanges(wireJid, changes)
+			return rest as T
+		})
+	}
+
+	/** Pre-WASM records are converted on read; bridge records pass straight through. */
+	const readSessionBytes = async (stored: unknown): Promise<Uint8Array | undefined> => {
+		if (!stored) return undefined
+
+		if (isLegacySessionRecord(stored)) {
+			if (!hasOpenLegacySession(stored)) return undefined
+			return importLegacySessionRecordV1(toTypedRecord(stored), {
+				identityKey: generateSignalPubKey(creds.signedIdentityKey.public),
+				registrationId: creds.registrationId
+			})
+		}
+
+		return stored as Uint8Array
+	}
+
+	/**
+	 * One write for everything the operation touched. Absent fields are left
+	 * alone: rewriting an untouched record would clobber a concurrent update.
+	 */
+	const applyChanges = async (wireJid: string, changes: SignalChanges) => {
+		const update: SignalDataSet = {}
+
+		if (changes.sessionCleared) {
+			update.session = { [wireJid]: null }
+		} else if (changes.session) {
+			update.session = { [wireJid]: changes.session }
+		}
+
+		if (changes.identity) {
+			update['identity-key'] = { [wireJid]: changes.identity }
+		}
+
+		if (changes.removedPreKeyId !== undefined) {
+			update['pre-key'] = { [changes.removedPreKeyId]: null }
+		}
+
+		if (Object.keys(update).length) {
+			await parsedKeys.set(update)
+		}
 	}
 
 	const repository: SignalRepositoryWithLIDStore = {
@@ -226,78 +324,42 @@ export function makeLibSignalRepository(
 			})
 		},
 		async decryptMessage({ jid, type, ciphertext }) {
-			const addr = jidToSignalProtocolAddress(jid)
-			const addrStr = addr.toString()
+			// A prekey message names the one-time key it consumes, so the snapshot
+			// can carry it: the operation never has to reach back for a record.
+			const preKeyIds = type === 'pkmsg' ? preKeyIdsFrom(ciphertext) : []
 
-			// Pre-resolve the wire id ONCE, then thread it through libsignal's
-			// internal storage calls via a pinned `signalStorage` instance.
-			// Without pinning, `storage.loadSession`/`storeSession`/`saveIdentity`
-			// each independently re-resolve via `lidMapping` — if a mapping
-			// change lands between our pre-resolve (for the lock) and any of
-			// those internal calls, the actual row hit can drift away from
-			// the locked record. Pinning makes the entire operation use
-			// `wireJid` everywhere `addrStr` would appear.
-			const wireJid = await resolveLIDSignalAddress(addrStr)
-			const pinnedStorage = pinResolutionForStorage(addrStr, wireJid)
-			const session = new SessionCipher(pinnedStorage, addr)
+			const { plaintext } = await withSession(
+				jid,
+				async (snapshot, address) => {
+					try {
+						const out =
+							type === 'pkmsg'
+								? await decryptPreKeyWithSnapshot(snapshot, address, ciphertext)
+								: await decryptWhisperWithSnapshot(snapshot, address, ciphertext)
 
-			// H1 fix: pkmsg identity-key save runs INSIDE the per-jid transaction
-			// scope, sharing the session+identity-key locks with the decrypt
-			// itself. Previously the save happened before the transaction was
-			// opened, so a concurrent send for the same jid could load the stale
-			// session under its own meId-keyed lock and then commit it back over
-			// the cleared one.
-			const records: RecordRef[] = [{ type: 'session', id: wireJid }]
-			if (type === 'pkmsg') {
-				records.push({ type: 'identity-key', id: wireJid })
-			}
-
-			async function doDecrypt() {
-				let result: Uint8Array
-				try {
-					switch (type) {
-						case 'pkmsg':
-							result = await session.decryptPreKeyWhisperMessage(ciphertext)
-							break
-						case 'msg':
-							result = await session.decryptWhisperMessage(ciphertext)
-							break
-					}
-				} catch (error) {
-					throw normalizeDecryptError(error)
-				}
-
-				return result
-			}
-
-			return parsedKeys.transactWith({ records }, async () => {
-				if (type === 'pkmsg') {
-					const identityKey = extractIdentityFromPkmsg(ciphertext)
-					if (identityKey) {
-						const identityChanged = await pinnedStorage.saveIdentity(addrStr, identityKey)
-						if (identityChanged) {
-							logger.info({ jid, addr: addrStr }, 'identity key changed or new contact, session will be re-established')
+						if (out.changes.sessionCleared) {
+							logger.info({ jid }, 'identity key changed, session will be re-established')
 						}
-					}
-				}
 
-				return await doDecrypt()
-			})
+						return { plaintext: out.plaintext, changes: out.changes }
+					} catch (error) {
+						throw normalizeDecryptError(error)
+					}
+				},
+				{ preKeyIds }
+			)
+
+			return plaintext
 		},
 
 		async encryptMessage({ jid, data }) {
-			const addr = jidToSignalProtocolAddress(jid)
-			const addrStr = addr.toString()
-			// Pre-resolve + pin so libsignal's internal storage calls use the
-			// same wire id we lock on (see decryptMessage for rationale).
-			const wireJid = await resolveLIDSignalAddress(addrStr)
-			const pinnedStorage = pinResolutionForStorage(addrStr, wireJid)
-			const cipher = new SessionCipher(pinnedStorage, addr)
-
-			return parsedKeys.transactWith({ records: [{ type: 'session', id: wireJid }] }, async () => {
-				const { type: sigType, body } = await cipher.encrypt(data)
-				const type = sigType === 3 ? 'pkmsg' : 'msg'
-				return { type, ciphertext: body }
+			return withSession(jid, async (snapshot, address) => {
+				const out = await encryptWithSnapshot(snapshot, address, data)
+				return {
+					type: out.messageType === 3 ? ('pkmsg' as const) : ('msg' as const),
+					ciphertext: out.ciphertext,
+					changes: out.changes
+				}
 			})
 		},
 
@@ -359,19 +421,22 @@ export function makeLibSignalRepository(
 
 		async injectE2ESession({ jid, session }) {
 			logger.trace({ jid }, 'injecting E2EE session')
-			const addr = jidToSignalProtocolAddress(jid)
-			const addrStr = addr.toString()
-			// Pre-resolve + pin so libsignal's internal storage calls use the
-			// same wire id we lock on (see decryptMessage for rationale).
-			const wireJid = await resolveLIDSignalAddress(addrStr)
-			const pinnedStorage = pinResolutionForStorage(addrStr, wireJid)
-			const cipher = new SessionBuilder(pinnedStorage, addr)
-			return parsedKeys.transactWith({ records: [{ type: 'session', id: wireJid }] }, async () => {
-				// libsignal runtime accepts an absent prekey (initOutgoing checks `device.preKey && ...`)
-				// but the bundled .d.ts marks it required.
-				await cipher.initOutgoing(session as unknown as Parameters<typeof cipher.initOutgoing>[0])
+			await withSession(jid, async (snapshot, address) => {
+				const out = await processBundleWithSnapshot(snapshot, address, {
+					registrationId: session.registrationId,
+					identityKey: session.identityKey,
+					preKey: session.preKey ? { keyId: session.preKey.keyId, publicKey: session.preKey.publicKey } : undefined,
+					signedPreKey: {
+						keyId: session.signedPreKey.keyId,
+						publicKey: session.signedPreKey.publicKey,
+						signature: session.signedPreKey.signature
+					}
+				})
+
+				return { changes: out.changes }
 			})
 		},
+
 		jidToSignalProtocolAddress(jid) {
 			return jidToSignalProtocolAddress(jid).toString()
 		},
@@ -573,7 +638,7 @@ export function makeLibSignalRepository(
 								// record was silently skipped, which preserved it by accident;
 								// now that the copy is real the check has to be explicit.
 								if (hasOpenLegacySession(pnSession) && !hasOpenSession(lidSessions[lidAddrStr])) {
-									sessionUpdates[lidAddrStr] = pnSession as unknown as Uint8Array
+									sessionUpdates[lidAddrStr] = pnSession
 									sessionUpdates[pnAddrStr] = null
 
 									migratedCount++
