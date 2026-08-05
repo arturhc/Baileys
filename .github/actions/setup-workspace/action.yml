@@ -14,6 +14,12 @@ description: >-
 # prebuilt: it is the same artifact consumers get, and it costs seconds.
 
 inputs:
+  force-bridge-build:
+    description: >-
+      Compile the bridge regardless of what the change touches. Set by jobs that
+      cannot run without it, such as the bridge's own build.
+    required: false
+    default: 'false'
   node-version:
     description: Node version to install
     required: false
@@ -36,11 +42,19 @@ runs:
       id: detect
       shell: bash
       env:
+        FORCE_BUILD: ${{ inputs.force-bridge-build }}
         GH_TOKEN: ${{ github.token }}
         EVENT_NAME: ${{ github.event_name }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
         set -euo pipefail
+
+        # Some jobs cannot run against a prebuilt at all.
+        if [ "$FORCE_BUILD" = "true" ]; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "Bridge build forced by the caller."
+          exit 0
+        fi
 
         # On a push to a protected branch there is no diff to consult and the
         # published bridge may already be behind, so always build.

@@ -19,6 +19,7 @@ on:
       - 'package.json'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/bridge-build.yml'
+      - '.github/actions/setup-workspace/**'
   pull_request:
     paths:
       - 'packages/whatsapp-rust-bridge/**'
@@ -26,6 +27,7 @@ on:
       - 'package.json'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/bridge-build.yml'
+      - '.github/actions/setup-workspace/**'
 
 permissions:
   contents: read
@@ -48,6 +50,11 @@ jobs:
       # Compiles the crate and installs the workspace against it.
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          # This job exists to compile the crate, so it must never fall back to
+          # the prebuilt: a lockfile-only PR still triggers it and would then
+          # reach `pnpm build` with no wasm-pack installed.
+          force-bridge-build: 'true'
 
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
