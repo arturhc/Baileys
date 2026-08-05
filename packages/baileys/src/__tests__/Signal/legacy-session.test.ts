@@ -339,6 +339,29 @@ describe('repository on a pre-WASM auth state', () => {
 		expect(data.session![plainAddr]).toBeDefined()
 	})
 
+	it('picks the open device-99 row when the hosted one is closed', async () => {
+		// Preferring the hosted shape unconditionally would strand the live
+		// session whenever the hosted row is the dead one.
+		const lidJid = '18000000000006@lid'
+		const plainAddr = '5511900000001.99'
+		const hostedAddr = `5511900000001_${WAJIDDomains.HOSTED}.99`
+		const liveBytes = await bridgeSessionBytes('5511900000001:99@hosted', 8)
+
+		const { repository, data } = makeRepository({ 'device-list': { '5511900000001': ['99'] } })
+		// An empty record deserialises to a session with no open state.
+		data.session = { [plainAddr]: liveBytes, [hostedAddr]: new Uint8Array([0]) }
+
+		const result = await repository.migrateSession(pnJid, lidJid)
+
+		expect(result.migrated).toBe(1)
+		expect(Buffer.from(data.session![`18000000000006_${WAJIDDomains.HOSTED_LID}.99`] as Uint8Array)).toEqual(
+			Buffer.from(liveBytes)
+		)
+		expect(data.session![plainAddr]).toBeUndefined()
+		// The closed row is left behind rather than migrated.
+		expect(data.session![hostedAddr]).toBeDefined()
+	})
+
 	it('does not migrate a legacy record whose states are all closed', async () => {
 		const lidJid = '18000000000001@lid'
 		const closedOnly = {

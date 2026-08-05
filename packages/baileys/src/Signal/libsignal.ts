@@ -581,15 +581,19 @@ export function makeLibSignalRepository(
 						// Both historical shapes hold a row for this device, and they
 						// share one destination. Migrating both would delete both and
 						// keep whichever landed last, dropping a ratchet that may still
-						// be live. Take the hosted address, which is the shape written
-						// today, and leave the other row where it is.
-						const hostedIsNew = sessionKey.includes('_')
+						// be live. Prefer whichever row is still open; if that does not
+						// separate them, take the hosted address, which is the shape
+						// written today. The row not chosen is left where it is.
+						const candidateOpen = hasOpenSession(sessionData)
+						const incumbentOpen = hasOpenSession(existingSessions[already.addrStr])
+						const takeCandidate = candidateOpen !== incumbentOpen ? candidateOpen : sessionKey.includes('_')
+
 						logger.warn(
-							{ device: deviceNum, migrating: hostedIsNew ? sessionKey : already.addrStr },
+							{ device: deviceNum, migrating: takeCandidate ? sessionKey : already.addrStr },
 							'device has a session under both the plain and hosted address; migrating one and leaving the other'
 						)
 
-						if (hostedIsNew) {
+						if (takeCandidate) {
 							foundByDevice.set(deviceNum, { jid, addrStr: sessionKey })
 						}
 
