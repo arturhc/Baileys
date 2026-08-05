@@ -40,6 +40,7 @@
         "prebuild": "node scripts/clean.mjs",
         "postbuild": "tsc -p tsconfig.json --outDir dist",
         "build": "pnpm run prebuild && pnpm run build:wasm && pnpm run build:ts && pnpm run postbuild",
+        "build:profile": "WHATSAPP_RUST_BRIDGE_PROFILE=1 pnpm run build",
         "test:typecheck": "tsc -p tsconfig.test.json --noEmit",
         "test:rust": "wasm-pack test --node",
         "test:rust:if-available": "node scripts/test-rust.mjs",
