@@ -491,13 +491,15 @@ impl JsStorageAdapter {
             let sender_chain_key_obj = get_object(&state_obj, "senderChainKey")
                 .ok_or_else(|| invalid_js_data("migrate_sender_key", "Missing senderChainKey"))?;
             let iteration = get_number(&sender_chain_key_obj, "iteration").unwrap_or(0.0) as u32;
-            let seed =
-                get_bytes_from_buffer_json(&sender_chain_key_obj, "seed")?.unwrap_or_default();
+            // Defaulting a required key to empty produces a record that only
+            // fails much later, with an error that says nothing about the row
+            // it came from. Name it here instead.
+            let seed = required_key_bytes(&sender_chain_key_obj, "seed", "senderChainKey.seed")?;
 
             let sender_signing_key_obj = get_object(&state_obj, "senderSigningKey")
                 .ok_or_else(|| invalid_js_data("migrate_sender_key", "Missing senderSigningKey"))?;
             let public_key =
-                get_bytes_from_buffer_json(&sender_signing_key_obj, "public")?.unwrap_or_default();
+                required_key_bytes(&sender_signing_key_obj, "public", "senderSigningKey.public")?;
             // The JS backend wrote an empty Buffer for a state it has no private
             // key for, which is every sender key received from someone else. An
             // empty buffer is not a key: carrying it as Some() makes the record
@@ -514,7 +516,7 @@ impl JsStorageAdapter {
                 let msg_key_obj = sender_message_keys_arr.get(j);
                 let msg_iteration = get_number(&msg_key_obj, "iteration").unwrap_or(0.0) as u32;
                 let msg_seed =
-                    get_bytes_from_buffer_json(&msg_key_obj, "seed")?.unwrap_or_default();
+                    required_key_bytes(&msg_key_obj, "seed", "senderMessageKeys[].seed")?;
 
                 sender_message_keys.push(SenderMessageKey {
                     iteration: Some(msg_iteration),
@@ -773,6 +775,13 @@ fn get_number(obj: &JsValue, key: &str) -> Option<f64> {
         .and_then(|v| v.as_f64())
 }
 
+/// A key field the record cannot be built without.
+fn required_key_bytes(obj: &JsValue, key: &str, label: &'static str) -> SignalResult<Vec<u8>> {
+    get_bytes_from_buffer_json(obj, key)?
+        .filter(|bytes| !bytes.is_empty())
+        .ok_or_else(|| invalid_js_data("migrate_sender_key", label))
+}
+
 fn get_bytes_from_buffer_json(obj: &JsValue, key: &str) -> SignalResult<Option<Vec<u8>>> {
     let Ok(val) = js_sys::Reflect::get(obj, &JsValue::from_str(key)) else {
         return Ok(None);
@@ -781,14 +790,19 @@ fn get_bytes_from_buffer_json(obj: &JsValue, key: &str) -> SignalResult<Option<V
         return Ok(None);
     }
 
-    // Check for Buffer-like object { type: "Buffer", data: [...] }
+    // Buffer-like object. `data` is an array when the value came from plain
+    // JSON.stringify, and base64 text when it went through Baileys' own
+    // BufferJSON.replacer; a store may have written either.
     let type_prop = js_sys::Reflect::get(&val, &JsValue::from_str("type")).ok();
     let data_prop = js_sys::Reflect::get(&val, &JsValue::from_str("data")).ok();
     if let (Some(t), Some(d)) = (type_prop, data_prop)
         && t.as_string().as_deref() == Some("Buffer")
-        && js_sys::Array::is_array(&d)
     {
-        return js_array_to_bytes(&js_sys::Array::from(&d)).map(Some);
+        if js_sys::Array::is_array(&d) {
+            return js_array_to_bytes(&js_sys::Array::from(&d)).map(Some);
+        }
+
+        return Ok(d.as_string().and_then(|s| BASE64_STANDARD.decode(&s).ok()));
     }
 
     // Try Uint8Array
@@ -1338,6 +1352,38 @@ mod js_value_tests {
             get_bytes_from_buffer_json(&holder, "missing").unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn a_buffer_json_envelope_with_base64_data_decodes_to_bytes() {
+        // Baileys' own BufferJSON.replacer writes the payload as base64 text
+        // rather than a byte array, so a store that round-trips through it
+        // hands us this shape. Reading it as absent would silently default the
+        // field to empty and leave the record unusable.
+        let envelope = js_sys::Object::new();
+        js_sys::Reflect::set(&envelope, &JsValue::from_str("type"), &"Buffer".into()).unwrap();
+        js_sys::Reflect::set(&envelope, &JsValue::from_str("data"), &"AQID".into()).unwrap();
+        let holder = object_with("seed", envelope.into());
+
+        assert_eq!(
+            get_bytes_from_buffer_json(&holder, "seed").unwrap(),
+            Some(vec![1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn a_buffer_json_envelope_with_unreadable_data_is_absent() {
+        let envelope = js_sys::Object::new();
+        js_sys::Reflect::set(&envelope, &JsValue::from_str("type"), &"Buffer".into()).unwrap();
+        js_sys::Reflect::set(
+            &envelope,
+            &JsValue::from_str("data"),
+            &JsValue::from_f64(7.0),
+        )
+        .unwrap();
+        let holder = object_with("seed", envelope.into());
+
+        assert_eq!(get_bytes_from_buffer_json(&holder, "seed").unwrap(), None);
     }
 }
 

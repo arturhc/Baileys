@@ -3,6 +3,7 @@ import P from 'pino'
 import { makeLibSignalRepository } from '../../Signal/libsignal'
 import type { SignalAuthState, SignalDataSet, SignalDataTypeMap, SignalKeyStore } from '../../Types'
 import { addTransactionCapability, initAuthCreds } from '../../Utils/auth-utils'
+import { BufferJSON } from '../../Utils/generics'
 
 /**
  * Sending into a group starts with distributing your own sender key. Nothing
@@ -78,6 +79,38 @@ describe('group sender keys', () => {
 			authorJid: aliceJid,
 			item: { groupId: groupJid, axolotlSenderKeyDistributionMessage: skdm } as never
 		})
+
+		const sent = await alice.repository.encryptGroupMessage({
+			group: groupJid,
+			meId: aliceJid,
+			data: Buffer.from('hello group')
+		})
+		const received = await bob.repository.decryptGroupMessage({
+			group: groupJid,
+			authorJid: aliceJid,
+			msg: sent.ciphertext
+		})
+
+		expect(Buffer.from(received).toString()).toBe('hello group')
+	})
+
+	it('reads a stored key whose buffers came back as base64 text', async () => {
+		const alice = makeParty()
+		const bob = makeParty()
+
+		const skdm = await alice.repository.getSenderKeyDistributionMessage({ group: groupJid, meId: aliceJid })
+		await bob.repository.processSenderKeyDistributionMessage({
+			authorJid: aliceJid,
+			item: { groupId: groupJid, axolotlSenderKeyDistributionMessage: skdm } as never
+		})
+
+		// A store that round-trips its rows through BufferJSON writes every
+		// buffer as { type: 'Buffer', data: '<base64>' } instead of a byte
+		// array. Both shapes reach us, and reading one of them as absent would
+		// leave the record with empty keys and fail far from here.
+		const [key] = Object.keys(bob.data['sender-key']!)
+		const states = JSON.parse(Buffer.from(bob.data['sender-key']![key!] as Uint8Array).toString())
+		bob.data['sender-key']![key!] = Buffer.from(JSON.stringify(states, BufferJSON.replacer))
 
 		const sent = await alice.repository.encryptGroupMessage({
 			group: groupJid,
