@@ -478,3 +478,16 @@ pub fn project_legacy_session_record_v1(
         },
     }
 }
+
+/// The JS backend stored a sender-key record as UTF-8 JSON. Callers that keep
+/// that shape on disk convert here; the storage adapter itself stays neutral,
+/// so a consumer that prefers the native bytes is unaffected.
+#[wasm_bindgen(js_name = projectLegacySenderKeyRecordV1)]
+pub fn project_legacy_sender_key_record_v1(bytes: &[u8]) -> Result<Uint8Array, JsValue> {
+    let record = wacore_libsignal::protocol::SenderKeyRecord::deserialize(bytes)
+        .map_err(|error| JsValue::from_str(&format!("recordBytes: {error}")))?;
+    let json = crate::storage_adapter::legacy_sender_key::serialize(record)
+        .map_err(|error| JsValue::from_str(&format!("legacy sender key: {error}")))?;
+
+    Ok(byte_array(&json))
+}

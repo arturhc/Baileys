@@ -498,7 +498,12 @@ impl JsStorageAdapter {
                 .ok_or_else(|| invalid_js_data("migrate_sender_key", "Missing senderSigningKey"))?;
             let public_key =
                 get_bytes_from_buffer_json(&sender_signing_key_obj, "public")?.unwrap_or_default();
-            let private_key = get_bytes_from_buffer_json(&sender_signing_key_obj, "private")?;
+            // The JS backend wrote an empty Buffer for a state it has no private
+            // key for, which is every sender key received from someone else. An
+            // empty buffer is not a key: carrying it as Some() makes the record
+            // fail validation the moment anything reads its components.
+            let private_key = get_bytes_from_buffer_json(&sender_signing_key_obj, "private")?
+                .filter(|key| !key.is_empty());
 
             let sender_message_keys_arr = get_object(&state_obj, "senderMessageKeys")
                 .map(|v| js_sys::Array::from(&v))
@@ -1164,6 +1169,96 @@ impl SenderKeyStore for JsStorageAdapter {
     }
 }
 
+/// The JS backend stored a sender-key record as UTF-8 JSON, and
+/// `migrate_legacy_sender_key` above reads exactly that. Writing it back keeps
+/// the row readable by a pre-WASM release: unlike a session, every field of a
+/// sender-key state has a v1 counterpart, so nothing is lost either way.
+pub mod legacy_sender_key {
+    use serde::Serialize;
+    use wacore_libsignal::protocol::SenderKeyRecord as CoreSenderKeyRecord;
+    use wacore_libsignal::protocol::error::Result as SignalResult;
+
+    /// `JSON.stringify` of a Buffer, which is the shape the JS backend wrote.
+    #[derive(Serialize)]
+    struct Bytes<'a> {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        data: &'a [u8],
+    }
+
+    fn bytes(data: &[u8]) -> Bytes<'_> {
+        Bytes {
+            kind: "Buffer",
+            data,
+        }
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ChainKey<'a> {
+        iteration: u32,
+        seed: Bytes<'a>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SigningKey<'a> {
+        public: Bytes<'a>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        private: Option<Bytes<'a>>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MessageKey<'a> {
+        iteration: u32,
+        seed: Bytes<'a>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct State<'a> {
+        sender_key_id: u32,
+        sender_chain_key: ChainKey<'a>,
+        sender_signing_key: SigningKey<'a>,
+        sender_message_keys: Vec<MessageKey<'a>>,
+    }
+
+    pub fn serialize(record: CoreSenderKeyRecord) -> SignalResult<Vec<u8>> {
+        let components = record.into_components()?;
+        let states: Vec<State<'_>> = components
+            .states
+            .iter()
+            .map(|state| State {
+                sender_key_id: state.key_id,
+                sender_chain_key: ChainKey {
+                    iteration: state.chain_key.iteration,
+                    seed: bytes(&state.chain_key.seed),
+                },
+                sender_signing_key: SigningKey {
+                    public: bytes(&state.signing_key.public),
+                    private: state.signing_key.private.as_deref().map(bytes),
+                },
+                sender_message_keys: state
+                    .message_keys
+                    .iter()
+                    .map(|key| MessageKey {
+                        iteration: key.iteration,
+                        seed: bytes(&key.seed),
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        serde_json::to_vec(&states).map_err(|error| {
+            wacore_libsignal::protocol::SignalProtocolError::InvalidState(
+                "store_sender_key",
+                format!("could not write the legacy shape: {error}"),
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 mod js_value_tests {
     use super::{get_bytes_from_buffer_json, get_number, get_object};
@@ -1240,6 +1335,51 @@ mod js_value_tests {
         assert_eq!(
             get_bytes_from_buffer_json(&holder, "missing").unwrap(),
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod legacy_sender_key_tests {
+    use super::legacy_sender_key;
+    use wacore_libsignal::protocol::{KeyPair, SenderKeyRecord};
+    use wasm_bindgen_test::wasm_bindgen_test as test;
+
+    fn record() -> SenderKeyRecord {
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+        let signing = KeyPair::generate(&mut rng);
+        let mut record = SenderKeyRecord::new_empty();
+        record.add_sender_key_state(
+            3,
+            7,
+            42,
+            &[9u8; 32],
+            signing.public_key,
+            Some(signing.private_key),
+        );
+        record
+    }
+
+    #[test]
+    fn writes_the_shape_the_js_backend_wrote() {
+        let bytes = legacy_sender_key::serialize(record()).expect("serialize");
+        let text = String::from_utf8(bytes).expect("utf8");
+
+        assert!(
+            text.starts_with('['),
+            "legacy records are a JSON array: {text}"
+        );
+        for field in [
+            "senderKeyId",
+            "senderChainKey",
+            "senderSigningKey",
+            "senderMessageKeys",
+        ] {
+            assert!(text.contains(field), "missing {field} in {text}");
+        }
+        assert!(
+            text.contains(r#""type":"Buffer""#),
+            "bytes use the Buffer envelope"
         );
     }
 }
