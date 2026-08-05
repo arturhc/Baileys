@@ -15,6 +15,8 @@ pub mod noise_session;
 pub mod protocol_address;
 pub mod sender_key_name;
 pub mod session_builder;
+pub mod snapshot_api;
+pub mod snapshot_store;
 pub mod session_cipher;
 pub mod session_record;
 #[cfg(feature = "sticker")]
