@@ -2,9 +2,6 @@ use async_trait::async_trait;
 use base64::prelude::*;
 use buffa::{Message as _, MessageField};
 use js_sys::{Promise, Uint8Array};
-use serde::Deserialize;
-use serde::de::DeserializeOwned;
-use serde_bytes::ByteBuf;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -15,35 +12,18 @@ use waproto::whatsapp::{
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use wacore_libsignal::protocol::{
-    self as libsignal, DeviceId, Direction as StoreDirection, GenericSignedPreKey as _,
-    IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, KeyPair, PreKeyId,
-    PreKeyRecord, PreKeyStore, PrivateKey, SenderKeyStore, SessionStore, SignedPreKeyId,
-    SignedPreKeyRecord, SignedPreKeyStore,
-};
+use wacore_libsignal::protocol::{self as libsignal, SenderKeyStore};
 type SignalResult<T> = wacore_libsignal::protocol::error::Result<T>;
 
 use wacore_libsignal::protocol::SenderKeyRecord as CoreSenderKeyRecord;
-use wacore_libsignal::protocol::SessionRecord as CoreSessionRecord;
 use wacore_libsignal::protocol::SignalProtocolError;
-use wacore_libsignal::protocol::Timestamp;
 use wacore_libsignal::store::sender_key_name::SenderKeyName as CoreSenderKeyName;
 
-use crate::session_record::{SessionRecord, js_array_to_vec};
+use crate::session_record::js_array_to_vec;
 
 #[wasm_bindgen(typescript_custom_section)]
 const TS_SIGNAL_STORAGE: &str = r#"
 export interface SignalStorage {
-    loadSession(address: string): Uint8Array | null | undefined | Promise<Uint8Array | null | undefined>;
-    storeSession(address: string, record: SessionRecord): void | Promise<void>;
-    getOurIdentity(): KeyPair | Promise<KeyPair>;
-    getOurRegistrationId(): number | Promise<number>;
-    isTrustedIdentity(name: string, identityKey: Uint8Array, direction: number): boolean | Promise<boolean>;
-    loadIdentityKey?(name: string): Uint8Array | null | undefined | Promise<Uint8Array | null | undefined>;
-    saveIdentity?(name: string, identityKey: Uint8Array): boolean | Promise<boolean>;
-    loadPreKey(id: number): KeyPair | null | undefined | Promise<KeyPair | null | undefined>;
-    removePreKey(id: number): void | Promise<void>;
-    loadSignedPreKey(id: number): SignedPreKey | null | undefined | Promise<SignedPreKey | null | undefined>;
     loadSenderKey(keyId: string): Uint8Array | null | undefined | Promise<Uint8Array | null | undefined>;
     storeSenderKey(keyId: string, record: Uint8Array): void | Promise<void>;
 }
@@ -54,56 +34,6 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "SignalStorage")]
     #[derive(Clone)]
     pub type SignalStorage;
-
-    #[wasm_bindgen(structural, method, catch, js_name = loadSession)]
-    fn js_load_session(this: &SignalStorage, address: &str) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(structural, method, catch, js_name = storeSession)]
-    fn js_store_session(
-        this: &SignalStorage,
-        address: &str,
-        record: JsValue,
-    ) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(structural, method, catch, js_name = storeSessionRaw)]
-    fn js_store_session_raw(
-        this: &SignalStorage,
-        address: &str,
-        data: &Uint8Array,
-    ) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(structural, method, catch, js_name = getOurIdentity)]
-    fn js_get_our_identity(this: &SignalStorage) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(structural, method, catch, js_name = getOurRegistrationId)]
-    fn js_get_our_registration_id(this: &SignalStorage) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(structural, method, catch, js_name = isTrustedIdentity)]
-    fn js_is_trusted_identity(
-        this: &SignalStorage,
-        name: &str,
-        identity_key: &Uint8Array,
-        direction: u32,
-    ) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(structural, method, catch, js_name = loadIdentityKey)]
-    fn js_load_identity_key(this: &SignalStorage, name: &str) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(structural, method, catch, js_name = saveIdentity)]
-    fn js_save_identity(
-        this: &SignalStorage,
-        name: &str,
-        identity_key: &Uint8Array,
-    ) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(structural, method, catch, js_name = loadPreKey)]
-    fn js_load_pre_key(this: &SignalStorage, id: u32) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(structural, method, catch, js_name = removePreKey)]
-    fn js_remove_pre_key(this: &SignalStorage, id: u32) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(structural, method, catch, js_name = loadSignedPreKey)]
-    fn js_load_signed_pre_key(this: &SignalStorage, id: u32) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(structural, method, catch, js_name = loadSenderKey)]
     fn js_load_sender_key(this: &SignalStorage, key_id: &str) -> Result<JsValue, JsValue>;
@@ -119,13 +49,7 @@ extern "C" {
 #[derive(Clone)]
 pub struct JsStorageAdapter {
     pub js_storage: SignalStorage,
-    cached_identity_key_pair: Rc<RefCell<Option<IdentityKeyPair>>>,
-    cached_registration_id: Rc<RefCell<Option<u32>>>,
-    cached_sessions: Rc<RefCell<HashMap<String, CoreSessionRecord>>>,
     cached_sender_keys: Rc<RefCell<HashMap<String, CoreSenderKeyRecord>>>,
-    cached_identities: Rc<RefCell<HashMap<String, Vec<u8>>>>,
-    has_store_session_raw: Rc<RefCell<Option<bool>>>,
-    last_address_cache: Rc<RefCell<Option<(String, DeviceId, String)>>>,
     last_sender_key_cache: Rc<RefCell<Option<(String, String, String)>>>,
 }
 
@@ -133,85 +57,9 @@ impl JsStorageAdapter {
     pub fn new(js_storage: SignalStorage) -> Self {
         Self {
             js_storage,
-            cached_identity_key_pair: Rc::new(RefCell::new(None)),
-            cached_registration_id: Rc::new(RefCell::new(None)),
-            cached_sessions: Rc::new(RefCell::new(HashMap::new())),
             cached_sender_keys: Rc::new(RefCell::new(HashMap::new())),
-            cached_identities: Rc::new(RefCell::new(HashMap::new())),
-            has_store_session_raw: Rc::new(RefCell::new(None)),
-            last_address_cache: Rc::new(RefCell::new(None)),
             last_sender_key_cache: Rc::new(RefCell::new(None)),
         }
-    }
-
-    fn has_store_session_raw(&self) -> bool {
-        if let Some(has_raw) = *self.has_store_session_raw.borrow() {
-            return has_raw;
-        }
-
-        let has_raw = js_sys::Reflect::has(&self.js_storage, &JsValue::from_str("storeSessionRaw"))
-            .unwrap_or(false);
-        self.has_store_session_raw.borrow_mut().replace(has_raw);
-        has_raw
-    }
-
-    fn has_js_method(&self, name: &str) -> bool {
-        js_sys::Reflect::get(&self.js_storage, &JsValue::from_str(name))
-            .map(|value| value.is_function())
-            .unwrap_or(false)
-    }
-
-    async fn load_peer_identity(&self, address: &str) -> SignalResult<Option<Vec<u8>>> {
-        if let Some(identity) = self.cached_identities.borrow().get(address) {
-            return Ok(Some(identity.clone()));
-        }
-
-        if !self.has_js_method("loadIdentityKey") {
-            return Ok(None);
-        }
-
-        let result = self
-            .js_storage
-            .js_load_identity_key(address)
-            .map_err(js_to_signal_error)?;
-        let Some(value) = resolve_maybe_promise_optional(result).await? else {
-            return Ok(None);
-        };
-        let identity = js_value_to_bytes(&value)?.ok_or_else(|| {
-            invalid_js_data(
-                "load_identity_key",
-                "Expected Uint8Array, Array, or Buffer-like object",
-            )
-        })?;
-
-        self.cached_identities
-            .borrow_mut()
-            .insert(address.to_string(), identity.clone());
-
-        Ok(Some(identity))
-    }
-
-    #[inline]
-    fn get_address_string(&self, address: &libsignal::ProtocolAddress) -> String {
-        // Two devices of one user share a name, so the device id has to be part
-        // of the key: matching on the name alone would hand back another
-        // device's address.
-        let name = address.name();
-        let device = address.device_id();
-        let cache = self.last_address_cache.borrow();
-        if let Some((cached_name, cached_device, cached_str)) = cache.as_ref()
-            && cached_name == name
-            && *cached_device == device
-        {
-            return cached_str.clone();
-        }
-        drop(cache);
-
-        let addr_str = address.to_string();
-        self.last_address_cache
-            .borrow_mut()
-            .replace((name.to_string(), device, addr_str.clone()));
-        addr_str
     }
 
     #[inline]
@@ -323,138 +171,8 @@ impl JsStorageAdapter {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct JsKeyPairBytes {
-    #[serde(default, alias = "pubKey", alias = "publicKey", alias = "public")]
-    public_key: Option<ByteBuf>,
-    #[serde(default, alias = "privKey", alias = "privateKey", alias = "private")]
-    private_key: Option<ByteBuf>,
-}
-
-impl JsKeyPairBytes {
-    fn into_vecs(self) -> Option<(Vec<u8>, Vec<u8>)> {
-        match (self.public_key, self.private_key) {
-            (Some(public_key), Some(private_key)) => {
-                Some((public_key.into_vec(), private_key.into_vec()))
-            }
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct JsKeyEnvelope {
-    #[serde(flatten)]
-    inline: JsKeyPairBytes,
-    #[serde(default, rename = "keyPair", alias = "key_pair")]
-    key_pair: Option<JsKeyPairBytes>,
-}
-
-impl JsKeyEnvelope {
-    fn into_vecs(self) -> Option<(Vec<u8>, Vec<u8>)> {
-        self.inline
-            .into_vecs()
-            .or_else(|| self.key_pair.and_then(|pair| pair.into_vecs()))
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct JsPreKeyRecordPayload {
-    #[serde(default, alias = "preKeyId", alias = "keyId")]
-    id: Option<u32>,
-    #[serde(flatten)]
-    keys: JsKeyEnvelope,
-}
-
-impl JsPreKeyRecordPayload {
-    fn into_record(self, requested_id: PreKeyId) -> SignalResult<PreKeyRecord> {
-        let effective_id = self.id.unwrap_or_else(|| requested_id.into());
-        let (public_key, private_key) = self
-            .keys
-            .into_vecs()
-            .ok_or_else(|| invalid_js_data("load_pre_key", "Missing public/private key bytes"))?;
-
-        let normalized_public_key = ensure_curve_key_with_prefix(public_key);
-        let key_pair = KeyPair::from_public_and_private(&normalized_public_key, &private_key)?;
-        Ok(PreKeyRecord::new(PreKeyId::from(effective_id), &key_pair))
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct JsSignedPreKeyRecordPayload {
-    #[serde(default, alias = "keyId")]
-    id: Option<u32>,
-    #[serde(default)]
-    timestamp: Option<u64>,
-    #[serde(default, alias = "sig", alias = "signatureBytes")]
-    signature: Option<ByteBuf>,
-    #[serde(flatten)]
-    keys: JsKeyEnvelope,
-}
-
-impl JsSignedPreKeyRecordPayload {
-    fn into_record(self, requested_id: SignedPreKeyId) -> SignalResult<SignedPreKeyRecord> {
-        let effective_id = self.id.unwrap_or_else(|| requested_id.into());
-        let (public_key, private_key) = self.keys.into_vecs().ok_or_else(|| {
-            invalid_js_data("load_signed_pre_key", "Missing public/private key bytes")
-        })?;
-        let signature = self
-            .signature
-            .map(ByteBuf::into_vec)
-            .ok_or_else(|| invalid_js_data("load_signed_pre_key", "Missing signature bytes"))?;
-        let timestamp_ms = self.timestamp.unwrap_or(0);
-        let normalized_public_key = ensure_curve_key_with_prefix(public_key);
-        let key_pair = KeyPair::from_public_and_private(&normalized_public_key, &private_key)?;
-        let timestamp = Timestamp::from_epoch_millis(timestamp_ms);
-        Ok(SignedPreKeyRecord::new(
-            SignedPreKeyId::from(effective_id),
-            timestamp,
-            &key_pair,
-            &signature,
-        ))
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct JsIdentityKeyPairPayload {
-    #[serde(flatten)]
-    keys: JsKeyEnvelope,
-}
-
-impl JsIdentityKeyPairPayload {
-    fn into_pair(self) -> SignalResult<IdentityKeyPair> {
-        let (public_key, private_key) = self.keys.into_vecs().ok_or_else(|| {
-            invalid_js_data("get_identity_key_pair", "Missing public/private key bytes")
-        })?;
-        let normalized_public_key = ensure_curve_key_with_prefix(public_key);
-        let identity_key = IdentityKey::try_from(normalized_public_key.as_slice())?;
-        let private_key = PrivateKey::deserialize(&private_key)?;
-        Ok(IdentityKeyPair::new(identity_key, private_key))
-    }
-}
-
 fn invalid_js_data(context: &'static str, message: impl Into<String>) -> SignalProtocolError {
     SignalProtocolError::InvalidState(context, message.into())
-}
-
-fn ensure_curve_key_with_prefix(bytes: Vec<u8>) -> Vec<u8> {
-    if bytes.len() == 33 && bytes.first().copied() == Some(0x05) {
-        return bytes;
-    }
-
-    if bytes.len() == 32 {
-        let mut prefixed = Vec::with_capacity(33);
-        prefixed.push(0x05);
-        prefixed.extend_from_slice(&bytes);
-        return prefixed;
-    }
-
-    bytes
 }
 
 #[inline]
@@ -468,26 +186,6 @@ async fn resolve_maybe_promise(value: JsValue) -> Result<JsValue, JsValue> {
         return JsFuture::from(Promise::unchecked_from_js(value)).await;
     }
     Ok(value)
-}
-
-#[inline]
-async fn resolve_maybe_promise_optional(value: JsValue) -> SignalResult<Option<JsValue>> {
-    let resolved = resolve_maybe_promise(value)
-        .await
-        .map_err(js_to_signal_error)?;
-    if resolved.is_null() || resolved.is_undefined() {
-        Ok(None)
-    } else {
-        Ok(Some(resolved))
-    }
-}
-
-#[inline]
-fn deserialize_js_value<T: DeserializeOwned>(
-    value: JsValue,
-    context: &'static str,
-) -> SignalResult<T> {
-    serde_wasm_bindgen::from_value(value).map_err(|err| invalid_js_data(context, err.to_string()))
 }
 
 #[inline]
@@ -573,295 +271,6 @@ fn get_bytes_from_buffer_json(obj: &JsValue, key: &str) -> SignalResult<Option<V
     Ok(val
         .as_string()
         .and_then(|s| BASE64_STANDARD.decode(&s).ok()))
-}
-
-#[async_trait(?Send)]
-impl SessionStore for JsStorageAdapter {
-    async fn load_session(
-        &self,
-        address: &libsignal::ProtocolAddress,
-    ) -> SignalResult<Option<CoreSessionRecord>> {
-        let address_str = self.get_address_string(address);
-
-        if let Some(record) = self.cached_sessions.borrow().get(&address_str) {
-            return Ok(Some(record.clone()));
-        }
-
-        let result = self
-            .js_storage
-            .js_load_session(&address_str)
-            .map_err(js_to_signal_error)?;
-        let value = resolve_maybe_promise(result)
-            .await
-            .map_err(js_to_signal_error)?;
-
-        if value.is_null() || value.is_undefined() {
-            return Ok(None);
-        }
-
-        // Only bytes. A caller holding a pre-WASM JSON record converts it
-        // through the core's typed model before handing it over; the
-        // field-by-field fallback that used to live here could not, since it
-        // stored a message key's seed as its cipher key and zeroed the mac and
-        // iv, so the first ciphertext the old build enciphered failed its MAC.
-        match js_value_to_bytes(&value)? {
-            Some(data) => {
-                let record =
-                    crate::counter_lease::waive_session(CoreSessionRecord::deserialize(&data)?);
-                // Insert into cache and return a clone - this is required since HashMap takes ownership
-                let result = record.clone();
-                self.cached_sessions
-                    .borrow_mut()
-                    .insert(address_str, record);
-                Ok(Some(result))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn has_session(&self, address: &libsignal::ProtocolAddress) -> SignalResult<bool> {
-        Ok(SessionStore::load_session(self, address).await?.is_some())
-    }
-
-    async fn store_session(
-        &mut self,
-        address: &libsignal::ProtocolAddress,
-        record: CoreSessionRecord,
-    ) -> SignalResult<()> {
-        let address_str = self.get_address_string(address);
-
-        // Before serializing: a record the protocol built for itself never
-        // passed the load path, and neither the row nor the cache should carry
-        // a reservation this crate does not honour.
-        let record = crate::counter_lease::waive_session(record);
-        let bytes = record.serialize()?;
-
-        let result = if self.has_store_session_raw() {
-            let uint8 = Uint8Array::from(bytes.as_slice());
-            self.js_storage.js_store_session_raw(&address_str, &uint8)
-        } else {
-            let session_record = SessionRecord::new(bytes);
-            let js_record: JsValue = session_record.into();
-            self.js_storage.js_store_session(&address_str, js_record)
-        };
-
-        let promise_value = result.map_err(js_to_signal_error)?;
-        resolve_maybe_promise(promise_value)
-            .await
-            .map_err(js_to_signal_error)?;
-
-        self.cached_sessions
-            .borrow_mut()
-            .insert(address_str, record);
-
-        Ok(())
-    }
-}
-
-#[async_trait(?Send)]
-impl IdentityKeyStore for JsStorageAdapter {
-    async fn get_identity_key_pair(&self) -> SignalResult<IdentityKeyPair> {
-        if let Some(pair) = self.cached_identity_key_pair.borrow().as_ref().cloned() {
-            return Ok(pair);
-        }
-
-        let result = self
-            .js_storage
-            .js_get_our_identity()
-            .map_err(js_to_signal_error)?;
-        let value = resolve_maybe_promise_optional(result).await?;
-
-        let js_value = value.ok_or_else(|| {
-            SignalProtocolError::InvalidState("get_identity_key_pair", "JS returned null".into())
-        })?;
-
-        let payload: JsIdentityKeyPairPayload =
-            deserialize_js_value(js_value, "get_identity_key_pair")?;
-        let key_pair = payload.into_pair()?;
-
-        self.cached_identity_key_pair
-            .borrow_mut()
-            .replace(key_pair.clone());
-
-        Ok(key_pair)
-    }
-
-    async fn get_local_registration_id(&self) -> SignalResult<u32> {
-        if let Some(id) = *self.cached_registration_id.borrow() {
-            return Ok(id);
-        }
-
-        let result = self
-            .js_storage
-            .js_get_our_registration_id()
-            .map_err(js_to_signal_error)?;
-        let value = resolve_maybe_promise(result)
-            .await
-            .map_err(js_to_signal_error)?;
-
-        let registration = value.as_f64().ok_or_else(|| {
-            SignalProtocolError::InvalidState(
-                "get_local_registration_id",
-                "JS did not return a number".into(),
-            )
-        })? as u32;
-
-        self.cached_registration_id
-            .borrow_mut()
-            .replace(registration);
-
-        Ok(registration)
-    }
-
-    async fn is_trusted_identity(
-        &self,
-        address: &libsignal::ProtocolAddress,
-        identity: &libsignal::IdentityKey,
-        direction: StoreDirection,
-    ) -> SignalResult<bool> {
-        let address_name = self.get_address_string(address);
-        let identity_bytes = identity.serialize();
-
-        if let Some(cached_key) = self.cached_identities.borrow().get(&address_name)
-            && cached_key.as_slice() == identity_bytes.as_slice()
-        {
-            return Ok(true);
-        }
-
-        let direction_val = match direction {
-            StoreDirection::Sending => 0,
-            StoreDirection::Receiving => 1,
-        };
-
-        let uint8 = Uint8Array::from(identity_bytes.as_slice());
-        let result = self
-            .js_storage
-            .js_is_trusted_identity(&address_name, &uint8, direction_val)
-            .map_err(js_to_signal_error)?;
-
-        let value = resolve_maybe_promise(result)
-            .await
-            .map_err(js_to_signal_error)?;
-
-        let trusted = value.as_bool().unwrap_or(false);
-
-        Ok(trusted)
-    }
-
-    // Identity rows are keyed by the full address, matching their session. A
-    // pre-fix store holds them under the bare user, and those rows are simply
-    // left behind: they are not read again, and re-learning an identity is
-    // harmless under trust-on-first-use, whereas deleting rows on upgrade risks
-    // dropping one that is still in use.
-    async fn save_identity(
-        &mut self,
-        address: &libsignal::ProtocolAddress,
-        identity: &libsignal::IdentityKey,
-    ) -> SignalResult<IdentityChange> {
-        // Identity records are keyed by the SAME address as the session they
-        // belong to. Using `name()` here drops the device id, which both keys
-        // the record differently from `load_session`/`store_session` AND makes
-        // the transaction layer lock a different id — so an identity write no
-        // longer serializes against the encrypt/decrypt touching that session.
-        let address_name = self.get_address_string(address);
-        let identity_bytes = identity.serialize();
-
-        let previous_identity = self.load_peer_identity(&address_name).await?;
-        let changed = previous_identity
-            .as_deref()
-            .is_some_and(|stored| stored != identity_bytes.as_slice());
-
-        if self.has_js_method("saveIdentity") {
-            let uint8 = Uint8Array::from(identity_bytes.as_slice());
-            let result = self
-                .js_storage
-                .js_save_identity(&address_name, &uint8)
-                .map_err(js_to_signal_error)?;
-            resolve_maybe_promise(result)
-                .await
-                .map_err(js_to_signal_error)?;
-        }
-
-        self.cached_identities
-            .borrow_mut()
-            .insert(address_name, identity_bytes.to_vec());
-
-        Ok(IdentityChange::from_changed(changed))
-    }
-
-    async fn get_identity(
-        &self,
-        address: &libsignal::ProtocolAddress,
-    ) -> SignalResult<Option<libsignal::IdentityKey>> {
-        let address_name = self.get_address_string(address);
-        self.load_peer_identity(&address_name)
-            .await?
-            .map(|identity| libsignal::IdentityKey::decode(&identity))
-            .transpose()
-    }
-}
-
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-impl PreKeyStore for JsStorageAdapter {
-    async fn get_pre_key(&self, prekey_id: PreKeyId) -> SignalResult<PreKeyRecord> {
-        let result = self
-            .js_storage
-            .js_load_pre_key(prekey_id.into())
-            .map_err(js_to_signal_error)?;
-        let value = resolve_maybe_promise_optional(result).await?;
-
-        let js_value = value.ok_or(SignalProtocolError::InvalidPreKeyId)?;
-        let payload: JsPreKeyRecordPayload = deserialize_js_value(js_value, "load_pre_key")?;
-        payload.into_record(prekey_id)
-    }
-
-    async fn save_pre_key(
-        &mut self,
-        _prekey_id: PreKeyId,
-        _record: &PreKeyRecord,
-    ) -> SignalResult<()> {
-        Ok(())
-    }
-
-    async fn remove_pre_key(&mut self, prekey_id: PreKeyId) -> SignalResult<()> {
-        let result = self
-            .js_storage
-            .js_remove_pre_key(prekey_id.into())
-            .map_err(js_to_signal_error)?;
-        resolve_maybe_promise(result)
-            .await
-            .map_err(js_to_signal_error)?;
-        Ok(())
-    }
-}
-
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-impl SignedPreKeyStore for JsStorageAdapter {
-    async fn get_signed_pre_key(
-        &self,
-        signed_prekey_id: SignedPreKeyId,
-    ) -> SignalResult<SignedPreKeyRecord> {
-        let result = self
-            .js_storage
-            .js_load_signed_pre_key(signed_prekey_id.into())
-            .map_err(js_to_signal_error)?;
-        let value = resolve_maybe_promise_optional(result).await?;
-
-        let js_value = value.ok_or(SignalProtocolError::InvalidSignedPreKeyId)?;
-        let payload: JsSignedPreKeyRecordPayload =
-            deserialize_js_value(js_value, "load_signed_pre_key")?;
-        payload.into_record(signed_prekey_id)
-    }
-
-    async fn save_signed_pre_key(
-        &mut self,
-        _id: SignedPreKeyId,
-        _record: &SignedPreKeyRecord,
-    ) -> SignalResult<()> {
-        Ok(())
-    }
 }
 
 #[async_trait(?Send)]

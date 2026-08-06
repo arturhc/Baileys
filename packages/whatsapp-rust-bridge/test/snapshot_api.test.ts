@@ -1,7 +1,7 @@
 import { describe, it, expect } from "@jest/globals";
 import {
+  processBundleWithSnapshot,
   ProtocolAddress,
-  SessionBuilder,
   decryptPreKeyWithSnapshot,
   decryptWhisperWithSnapshot,
   encryptWithSnapshot,
@@ -76,15 +76,9 @@ function snapshotOf(
 
 /** Opens a session from alice towards bob using the callback API (setup only). */
 async function establish(alice: Party, bob: Party, bobAddr: ProtocolAddress) {
-  const storage = new FakeStorage();
-  storage.ourIdentityKeyPair = {
-    pubKey: prefixed(alice.identity.public),
-    privKey: alice.identity.private,
-  };
-  storage.ourRegistrationId = alice.registrationId;
-
-  const builder = new SessionBuilder(storage as never, bobAddr);
-  await builder.initOutgoing({
+  // The same call the consumer makes; SessionBuilder is gone with the rest of
+  // the callback-based session path.
+  const out = await processBundleWithSnapshot(snapshotOf(alice), bobAddr, {
     registrationId: bob.registrationId,
     identityKey: prefixed(bob.identity.public),
     preKey: { keyId: 1, publicKey: prefixed(bob.preKey.keyPair.pubKey) },
@@ -93,9 +87,9 @@ async function establish(alice: Party, bob: Party, bobAddr: ProtocolAddress) {
       publicKey: prefixed(bob.signedPreKey.keyPair.pubKey),
       signature: bob.signedPreKey.signature,
     },
-  });
+  } as never);
 
-  const session = await storage.loadSession(bobAddr.toString());
+  const session = out.changes.session;
   if (!session) throw new Error("session was not established");
   return session as Uint8Array;
 }
@@ -210,6 +204,108 @@ describe("snapshot API", () => {
 
     // Reusing a chain index would repeat a ciphertext; each must be distinct.
     expect(new Set(produced).size).toBe(5);
+  });
+
+  // The three cases below replace what the removed SessionBuilder and
+  // SessionCipher suites covered. They are the same scenarios expressed
+  // against the snapshot calls, which is the only session API left.
+
+  it("does not discard a live session when the peer's bundle is processed again", async () => {
+    const alice = makeParty();
+    const bob = makeParty();
+    const session = await establish(alice, bob, bobAddr());
+
+    const first = await encryptWithSnapshot(
+      snapshotOf(alice, { session }),
+      bobAddr(),
+      new TextEncoder().encode("first"),
+    );
+
+    // A second bundle for the same peer, the way a re-fetch delivers one.
+    const again = await processBundleWithSnapshot(
+      snapshotOf(alice, { session: first.changes.session }),
+      bobAddr(),
+      {
+        registrationId: bob.registrationId,
+        identityKey: prefixed(bob.identity.public),
+        preKey: { keyId: 1, publicKey: prefixed(bob.preKey.keyPair.pubKey) },
+        signedPreKey: {
+          keyId: 1,
+          publicKey: prefixed(bob.signedPreKey.keyPair.pubKey),
+          signature: bob.signedPreKey.signature,
+        },
+      } as never,
+    );
+
+    // Bob must still be able to read the message sent under the old session,
+    // which is what breaks if processing a bundle replaces it outright.
+    const received = await decryptPreKeyWithSnapshot(
+      snapshotOf(bob),
+      aliceAddr(),
+      first.ciphertext,
+    );
+
+    expect(new TextDecoder().decode(received.plaintext)).toBe("first");
+    expect(again.changes.session).toBeDefined();
+  });
+
+  it("converges when both sides open a session at the same time", async () => {
+    const alice = makeParty();
+    const bob = makeParty();
+
+    // Neither has heard from the other yet, so both build from a bundle.
+    const aliceSession = await establish(alice, bob, bobAddr());
+    const bobSession = await establish(bob, alice, aliceAddr());
+
+    const fromAlice = await encryptWithSnapshot(
+      snapshotOf(alice, { session: aliceSession }),
+      bobAddr(),
+      new TextEncoder().encode("from alice"),
+    );
+    const fromBob = await encryptWithSnapshot(
+      snapshotOf(bob, { session: bobSession }),
+      aliceAddr(),
+      new TextEncoder().encode("from bob"),
+    );
+
+    // Each side decrypts the other's opener against its own pending session.
+    const atBob = await decryptPreKeyWithSnapshot(
+      snapshotOf(bob, { session: bobSession }),
+      aliceAddr(),
+      fromAlice.ciphertext,
+    );
+    const atAlice = await decryptPreKeyWithSnapshot(
+      snapshotOf(alice, { session: aliceSession }),
+      bobAddr(),
+      fromBob.ciphertext,
+    );
+
+    expect(new TextDecoder().decode(atBob.plaintext)).toBe("from alice");
+    expect(new TextDecoder().decode(atAlice.plaintext)).toBe("from bob");
+  });
+
+  it("accepts an incoming prekey message after a bundle was injected", async () => {
+    const alice = makeParty();
+    const bob = makeParty();
+
+    // Alice injects bob's bundle, then bob's own opener arrives before she
+    // ever sent anything: the injected session must not shut that out.
+    const injected = await establish(alice, bob, bobAddr());
+    const bobSession = await establish(bob, alice, aliceAddr());
+    const opener = await encryptWithSnapshot(
+      snapshotOf(bob, { session: bobSession }),
+      aliceAddr(),
+      new TextEncoder().encode("opener"),
+    );
+
+    const received = await decryptPreKeyWithSnapshot(
+      snapshotOf(alice, { session: injected }),
+      bobAddr(),
+      opener.ciphertext,
+    );
+
+    expect(new TextDecoder().decode(received.plaintext)).toBe("opener");
+    expect(received.changes.session).toBeDefined();
   });
 
   it("does not mutate the snapshot it was given", async () => {
