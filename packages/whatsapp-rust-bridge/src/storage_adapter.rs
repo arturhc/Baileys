@@ -573,14 +573,16 @@ mod legacy_sender_key_tests {
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let signing = KeyPair::generate(&mut rng);
         let mut record = SenderKeyRecord::new_empty();
-        record.add_sender_key_state(
-            3,
-            7,
-            42,
-            &[9u8; 32],
-            signing.public_key,
-            Some(signing.private_key),
-        );
+        record
+            .add_sender_key_state(
+                3,
+                7,
+                42,
+                &[9u8; 32],
+                signing.public_key,
+                Some(signing.private_key),
+            )
+            .expect("valid state");
         record
     }
 
