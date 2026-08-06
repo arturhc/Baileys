@@ -5,6 +5,7 @@ pub mod binary;
 mod counter_lease;
 pub mod crypto;
 pub mod curve;
+mod derivation_cache;
 pub mod group_cipher;
 pub mod group_types;
 #[cfg(feature = "image")]

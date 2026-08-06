@@ -1161,6 +1161,8 @@ impl SenderKeyStore for JsStorageAdapter {
         };
 
         let record = crate::counter_lease::waive_sender_key(record)?;
+        // The record is rebuilt per operation, so its derivation memo is cold.
+        crate::derivation_cache::warm(&record);
 
         self.cached_sender_keys
             .borrow_mut()

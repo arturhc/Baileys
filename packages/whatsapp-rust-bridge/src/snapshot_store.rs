@@ -89,7 +89,10 @@ impl SnapshotStore {
     }
 
     pub fn with_sender_key(&self, record: SenderKeyRecord) -> SignalResult<()> {
-        self.inner.borrow_mut().sender_key = Some(crate::counter_lease::waive_sender_key(record)?);
+        let record = crate::counter_lease::waive_sender_key(record)?;
+        // Mirror of the note in the adapter's `load_sender_key`.
+        crate::derivation_cache::warm(&record);
+        self.inner.borrow_mut().sender_key = Some(record);
         Ok(())
     }
 
