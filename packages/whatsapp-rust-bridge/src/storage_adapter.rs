@@ -9,12 +9,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use waproto::whatsapp::{
-    RecordStructure, SenderKeyRecordStructure, SenderKeyStateStructure, SessionStructure,
+    SenderKeyRecordStructure, SenderKeyStateStructure,
     sender_key_state_structure::{SenderChainKey, SenderMessageKey, SenderSigningKey},
-    session_structure::{
-        Chain,
-        chain::{ChainKey, MessageKey},
-    },
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -239,229 +235,6 @@ impl JsStorageAdapter {
             key_id.clone(),
         ));
         key_id
-    }
-
-    async fn migrate_legacy_json(&self, value: JsValue) -> SignalResult<Option<Vec<u8>>> {
-        let has_reg_id =
-            js_sys::Reflect::has(&value, &JsValue::from_str("registrationId")).unwrap_or(false);
-        let has_ratchet =
-            js_sys::Reflect::has(&value, &JsValue::from_str("currentRatchet")).unwrap_or(false);
-
-        let session_data = if has_reg_id && has_ratchet {
-            value
-        } else {
-            let has_sessions =
-                js_sys::Reflect::has(&value, &JsValue::from_str("_sessions")).unwrap_or(false);
-            if !has_sessions {
-                return Ok(None);
-            }
-
-            let sessions = get_object(&value, "_sessions")
-                .ok_or_else(|| invalid_js_data("migrate", "Missing _sessions"))?;
-            let sessions_obj = sessions
-                .dyn_ref::<js_sys::Object>()
-                .ok_or_else(|| invalid_js_data("migrate", "Invalid _sessions object"))?;
-            let keys = js_sys::Object::keys(sessions_obj);
-
-            if keys.length() == 0 {
-                return Ok(None);
-            }
-
-            let key = keys.get(0);
-            js_sys::Reflect::get(&sessions, &key).map_err(js_to_signal_error)?
-        };
-
-        let has_reg_id_inner =
-            js_sys::Reflect::has(&session_data, &JsValue::from_str("registrationId"))
-                .unwrap_or(false);
-        if !has_reg_id_inner {
-            return Ok(None);
-        }
-
-        let local_identity = self.get_identity_key_pair().await?;
-        let local_identity_public = local_identity.public_key().serialize().into();
-
-        let registration_id = get_number(&session_data, "registrationId").unwrap_or(0.0) as u32;
-
-        let current_ratchet = get_object(&session_data, "currentRatchet")
-            .ok_or_else(|| invalid_js_data("migrate", "Missing currentRatchet"))?;
-        let root_key_b64 = get_string(&current_ratchet, "rootKey").unwrap_or_default();
-        let root_key = BASE64_STANDARD.decode(root_key_b64).unwrap_or_default();
-
-        let previous_counter =
-            get_number(&current_ratchet, "previousCounter").unwrap_or(0.0) as u32;
-
-        let ephemeral_key_pair = get_object(&current_ratchet, "ephemeralKeyPair")
-            .ok_or_else(|| invalid_js_data("migrate", "Missing ephemeralKeyPair"))?;
-        let sender_ratchet_pub_b64 = get_string(&ephemeral_key_pair, "pubKey").unwrap_or_default();
-        let sender_ratchet_priv_b64 =
-            get_string(&ephemeral_key_pair, "privKey").unwrap_or_default();
-
-        let sender_ratchet_pub = BASE64_STANDARD
-            .decode(sender_ratchet_pub_b64)
-            .unwrap_or_default();
-        let sender_ratchet_priv = BASE64_STANDARD
-            .decode(sender_ratchet_priv_b64)
-            .unwrap_or_default();
-
-        let index_info = get_object(&session_data, "indexInfo")
-            .ok_or_else(|| invalid_js_data("migrate", "Missing indexInfo"))?;
-        let remote_identity_b64 = get_string(&index_info, "remoteIdentityKey").unwrap_or_default();
-        let remote_identity = BASE64_STANDARD
-            .decode(remote_identity_b64)
-            .unwrap_or_default();
-
-        let base_key_b64 = get_string(&index_info, "baseKey").unwrap_or_default();
-        let base_key = BASE64_STANDARD.decode(base_key_b64).unwrap_or_default();
-
-        let chains = get_object(&session_data, "_chains")
-            .ok_or_else(|| invalid_js_data("migrate", "Missing _chains"))?;
-        let chains_obj = chains
-            .dyn_ref::<js_sys::Object>()
-            .ok_or_else(|| invalid_js_data("migrate", "_chains expected to be an object"))?;
-        let chain_keys = js_sys::Object::keys(chains_obj);
-
-        let mut sender_chain = None;
-        let mut receiver_chains = Vec::new();
-
-        for i in 0..chain_keys.length() {
-            let key = chain_keys.get(i);
-            let chain = js_sys::Reflect::get(&chains, &key).map_err(|err| {
-                invalid_js_data(
-                    "migrate",
-                    format!(
-                        "Failed to read chain entry {:?}: {:?}",
-                        key.as_string(),
-                        err
-                    ),
-                )
-            })?;
-            let chain_type = get_number(&chain, "chainType").unwrap_or(0.0) as u32;
-
-            let chain_key_obj = get_object(&chain, "chainKey").ok_or_else(|| {
-                invalid_js_data("migrate", "Missing chainKey for legacy chain entry")
-            })?;
-            let counter = get_number(&chain_key_obj, "counter").unwrap_or(0.0) as u32;
-            let key_b64 = get_string(&chain_key_obj, "key").unwrap_or_default();
-            let key_bytes = BASE64_STANDARD.decode(key_b64).unwrap_or_default();
-
-            let message_keys_obj = get_object(&chain, "messageKeys").ok_or_else(|| {
-                invalid_js_data("migrate", "Missing messageKeys for legacy chain entry")
-            })?;
-            let message_keys_object = message_keys_obj
-                .dyn_ref::<js_sys::Object>()
-                .ok_or_else(|| invalid_js_data("migrate", "Invalid messageKeys object"))?;
-            let msg_keys_list = js_sys::Object::keys(message_keys_object);
-            let mut message_keys = Vec::new();
-
-            for j in 0..msg_keys_list.length() {
-                let idx_val = msg_keys_list.get(j);
-                let idx = idx_val.as_f64().ok_or_else(|| {
-                    invalid_js_data("migrate", "Message key index is not a number")
-                })? as u32;
-                let msg_key_b64 = js_sys::Reflect::get(&message_keys_obj, &idx_val)
-                    .map_err(|err| {
-                        invalid_js_data(
-                            "migrate",
-                            format!("Missing message key {}: {:?}", idx, err),
-                        )
-                    })?
-                    .as_string()
-                    .unwrap_or_default();
-                let msg_key_bytes = BASE64_STANDARD.decode(msg_key_b64).unwrap_or_default();
-                message_keys.push((idx, msg_key_bytes));
-            }
-
-            if chain_type == 1 {
-                sender_chain = Some((
-                    sender_ratchet_pub.clone(),
-                    sender_ratchet_priv.clone(),
-                    key_bytes,
-                    counter,
-                    message_keys,
-                ));
-            } else if chain_type == 2 {
-                let sender_ratchet_key_b64 = key.as_string().unwrap_or_default();
-                let sender_ratchet_key = BASE64_STANDARD
-                    .decode(sender_ratchet_key_b64)
-                    .unwrap_or_default();
-                receiver_chains.push((sender_ratchet_key, key_bytes, counter, message_keys));
-            }
-        }
-
-        let mut sender_chain_struct = MessageField::none();
-
-        if let Some((pub_key, priv_key, chain_key, counter, msg_keys)) = sender_chain {
-            let mut message_keys_vec = Vec::new();
-            for (idx, key) in msg_keys {
-                message_keys_vec.push(MessageKey {
-                    index: Some(idx),
-                    cipher_key: Some(key.into()),
-                    mac_key: Some(vec![0u8; 32].into()),
-                    iv: Some(vec![0u8; 16].into()),
-                    seed: None,
-                });
-            }
-
-            sender_chain_struct = MessageField::some(Chain {
-                sender_ratchet_key: Some(pub_key),
-                sender_ratchet_key_private: Some(priv_key),
-                chain_key: MessageField::some(ChainKey {
-                    index: Some(counter),
-                    key: Some(chain_key.into()),
-                }),
-                message_keys: message_keys_vec,
-            });
-        }
-
-        let mut receiver_chains_vec = Vec::new();
-        for (sender_ratchet, chain_key, counter, msg_keys) in receiver_chains {
-            let mut message_keys_vec = Vec::new();
-            for (idx, key) in msg_keys {
-                message_keys_vec.push(MessageKey {
-                    index: Some(idx),
-                    cipher_key: Some(key.into()),
-                    mac_key: Some(vec![0u8; 32].into()),
-                    iv: Some(vec![0u8; 16].into()),
-                    seed: None,
-                });
-            }
-
-            receiver_chains_vec.push(Chain {
-                sender_ratchet_key: Some(sender_ratchet),
-                sender_ratchet_key_private: None,
-                chain_key: MessageField::some(ChainKey {
-                    index: Some(counter),
-                    key: Some(chain_key.into()),
-                }),
-                message_keys: message_keys_vec,
-            });
-        }
-
-        let local_reg_id = self.get_local_registration_id().await?;
-
-        let session = SessionStructure {
-            session_version: Some(3),
-            local_identity_public: Some(local_identity_public),
-            remote_identity_public: Some(remote_identity),
-            root_key: Some(root_key),
-            previous_counter: Some(previous_counter),
-            sender_chain: sender_chain_struct,
-            receiver_chains: receiver_chains_vec,
-            pending_key_exchange: MessageField::none(),
-            pending_pre_key: MessageField::none(),
-            remote_registration_id: Some(registration_id),
-            local_registration_id: Some(local_reg_id),
-            needs_refresh: None,
-            alice_base_key: Some(base_key),
-        };
-
-        let record = RecordStructure {
-            current_session: MessageField::some(session),
-            previous_sessions: Vec::new(),
-        };
-
-        Ok(Some(record.encode_to_vec()))
     }
 
     fn migrate_legacy_sender_key(&self, data: &[u8]) -> SignalResult<Option<Vec<u8>>> {
@@ -741,27 +514,6 @@ fn js_value_to_bytes(value: &JsValue) -> SignalResult<Option<Vec<u8>>> {
     Ok(None)
 }
 
-fn is_legacy_session_object(value: &JsValue) -> bool {
-    let has_sessions =
-        js_sys::Reflect::has(value, &JsValue::from_str("_sessions")).unwrap_or(false);
-    let has_reg_id =
-        js_sys::Reflect::has(value, &JsValue::from_str("registrationId")).unwrap_or(false);
-    let has_ratchet =
-        js_sys::Reflect::has(value, &JsValue::from_str("currentRatchet")).unwrap_or(false);
-
-    has_sessions || (has_reg_id && has_ratchet)
-}
-
-fn get_string(obj: &JsValue, key: &str) -> Option<String> {
-    js_sys::Reflect::get(obj, &JsValue::from_str(key))
-        .ok()
-        .and_then(|v| v.as_string())
-}
-
-/// Reflect::get answers `Ok(undefined)` for a property that is not there, so
-/// mapping it straight to Some() makes "absent" indistinguishable from "present".
-/// Callers rely on None to default or to raise a clear error, and one of them fed
-/// the undefined to `Array::from`, which throws across the boundary.
 fn get_object(obj: &JsValue, key: &str) -> Option<JsValue> {
     let value = js_sys::Reflect::get(obj, &JsValue::from_str(key)).ok()?;
     if value.is_undefined() || value.is_null() {
@@ -847,15 +599,12 @@ impl SessionStore for JsStorageAdapter {
             return Ok(None);
         }
 
-        let bytes = if let Some(b) = js_value_to_bytes(&value)? {
-            Some(b)
-        } else if is_legacy_session_object(&value) {
-            self.migrate_legacy_json(value).await?
-        } else {
-            None
-        };
-
-        match bytes {
+        // Only bytes. A caller holding a pre-WASM JSON record converts it
+        // through the core's typed model before handing it over; the
+        // field-by-field fallback that used to live here could not, since it
+        // stored a message key's seed as its cipher key and zeroed the mac and
+        // iv, so the first ciphertext the old build enciphered failed its MAC.
+        match js_value_to_bytes(&value)? {
             Some(data) => {
                 let record =
                     crate::counter_lease::waive_session(CoreSessionRecord::deserialize(&data)?);
