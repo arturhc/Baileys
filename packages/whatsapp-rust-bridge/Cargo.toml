@@ -52,10 +52,10 @@ curve25519-dalek = { version = "4.1.3", default-features = false, features = [
     "digest",
     "precomputed-tables",
 ] }
+# Not used directly: pulled in to turn on the wasm_js backend, which the
+# wasm32 target refuses to build without.
 getrandom = { version = "0.4", features = ["wasm_js"] }
-hashify = { version = "0.2.9", default-features = false, features = ["force-32bit"] }
 hkdf = "0.12"
-hmac = "0.12"
 image = { version = "0.25.5", default-features = false, features = [
     "jpeg",
     "png",
@@ -65,7 +65,8 @@ img-parts = { version = "0.4", default-features = false, optional = true }
 js-sys = "0.3"
 log = "0.4"
 md-5 = "0.10"
-prost = { version = "0.14.1", default-features = false }
+# sys_rng is what make_rng falls back to for seeding; another crate happens to
+# turn it on today, but key generation must not depend on that staying true.
 rand = { version = "0.10", default-features = false, features = [
     "std",
     "std_rng",
@@ -75,13 +76,9 @@ serde = { version = "1.0.228", default-features = false, features = [
     "derive",
     "alloc",
 ] }
-serde-wasm-bindgen = "0.6.5"
 serde_bytes = "0.11"
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 sha2 = "0.10"
-simd-adler32 = { version = "0.3.7", default-features = false, features = [
-    "std",
-] }
 symphonia = { version = "0.5.4", default-features = false, features = [
     "mp3",
     "aac",
