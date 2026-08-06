@@ -847,8 +847,18 @@ function signalStorage(
 	 */
 	pinnedResolver?: (id: string) => Promise<string>
 ): SignalStorage & {
+	// Members the bridge no longer asks for, but this file still calls: the
+	// group path is all the adapter needs from us now.
+	loadSession(id: string): Promise<Uint8Array | SignalDataTypeMap['session'] | null>
+	storeSession(id: string, session: SessionRecord): Promise<void>
 	loadIdentityKey(id: string): Promise<Uint8Array | undefined>
 	saveIdentity(id: string, identityKey: Uint8Array): Promise<boolean>
+	isTrustedIdentity(): boolean
+	loadPreKey(id: number): Promise<{ pubKey: Uint8Array; privKey: Uint8Array } | null>
+	removePreKey(id: number): unknown
+	loadSignedPreKey(id: number): Promise<unknown>
+	getOurRegistrationId(): number
+	getOurIdentity(): { privKey: Uint8Array; pubKey: Uint8Array }
 } {
 	const resolveLIDSignalAddress = pinnedResolver ?? ((id: string) => resolveSignalAddressId(id, lidMapping))
 

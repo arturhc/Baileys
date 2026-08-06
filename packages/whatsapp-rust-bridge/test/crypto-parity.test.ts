@@ -1,10 +1,26 @@
 import { describe, it, expect } from "@jest/globals";
-import { randomBytes } from "crypto";
+import { createHash, hkdfSync, randomBytes } from "crypto";
 import { md5, hkdf } from "../dist/index.js";
-import {
-  md5 as baileysMd5,
-  hkdf as baileysHkdf,
-} from "baileys/lib/Utils/crypto.js";
+
+// Node itself, not the JS client: MD5 and HKDF are standard, so the reference
+// is the algorithm rather than another implementation of it.
+const baileysMd5 = (data: Uint8Array) =>
+  createHash("md5").update(data).digest();
+
+const baileysHkdf = async (
+  ikm: Uint8Array,
+  length: number,
+  { salt, info }: { salt?: Uint8Array; info?: string } = {},
+) =>
+  Buffer.from(
+    hkdfSync(
+      "sha256",
+      ikm,
+      salt ?? Buffer.alloc(0),
+      info ? Buffer.from(info) : Buffer.alloc(0),
+      length,
+    ),
+  );
 
 function hex(buffer: Uint8Array | Buffer): string {
   return Buffer.from(buffer).toString("hex");
