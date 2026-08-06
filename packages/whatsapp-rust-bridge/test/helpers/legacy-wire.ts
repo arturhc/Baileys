@@ -49,14 +49,26 @@ const canon = (value: unknown): string => JSON.stringify(value);
 
 type BufferJson = { type: "Buffer"; data: number[] };
 
-const isBufferJson = (value: unknown): value is BufferJson =>
-  typeof value === "object" &&
-  value !== null &&
-  (value as BufferJson).type === "Buffer" &&
-  Array.isArray((value as BufferJson).data);
+const isBufferJson = (value: unknown): value is BufferJson => {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as BufferJson;
+  if (candidate.type !== "Buffer" || !Array.isArray(candidate.data)) return false;
+  if (Object.keys(candidate).length !== 2) return false;
+  // Buffer.from truncates out-of-range values instead of rejecting them, so a
+  // hand-edited or truncated vector would revive as wrong bytes in silence.
+  return candidate.data.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
+};
 
 const revive = (value: unknown): unknown => {
   if (isBufferJson(value)) return Buffer.from(value.data);
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "Buffer"
+  ) {
+    throw new Error("recorded vector has a malformed Buffer");
+  }
+
   if (Array.isArray(value)) return value.map(revive);
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as object).map(([k, v]) => [k, revive(v)]));
