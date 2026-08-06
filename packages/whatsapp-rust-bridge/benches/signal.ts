@@ -118,7 +118,17 @@ class SnapshotCipher {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private apply(changes: any) {
-    if (changes.session) this.snapshot = { ...this.snapshot, session: changes.session };
+    // A replaced peer identity voids the ratchet built on the old one, and the
+    // core reports that by clearing rather than by handing back a new session.
+    // Keeping the old bytes would leave every later operation on a session the
+    // core has already disowned, which is what the Baileys store avoids by
+    // deleting the row.
+    if (changes.sessionCleared) {
+      this.snapshot = { ...this.snapshot, session: undefined };
+    } else if (changes.session) {
+      this.snapshot = { ...this.snapshot, session: changes.session };
+    }
+
     if (changes.identity) this.snapshot = { ...this.snapshot, peerIdentity: changes.identity };
     if (changes.removedPreKeyId !== undefined) {
       this.snapshot = {
