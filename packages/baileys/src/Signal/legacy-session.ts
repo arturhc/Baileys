@@ -41,8 +41,7 @@ export const isLegacySessionRecord = (value: unknown): value is LegacySessionRec
 export const entryRegistrationId = (
 	entry: LegacySessionEntry | undefined,
 	record: LegacySessionRecord
-): number | undefined =>
-	typeof entry?.registrationId === 'number' ? entry.registrationId : record.registrationId
+): number | undefined => (typeof entry?.registrationId === 'number' ? entry.registrationId : record.registrationId)
 
 const isUsableEntry = (
 	entry: LegacySessionEntry | undefined,

@@ -19,7 +19,7 @@ packages/
   baileys/                         The npm `baileys` library
     src/
       Socket/                      High-level socket — chats, groups, messages send/recv, newsletter, USync
-      Signal/                      Signal Protocol session/sender-key wrapping over libsignal-node
+      Signal/                      Signal Protocol session/sender-key wrapping over whatsapp-rust-bridge
       Utils/                       Decoding, media, auth state, retry, app-state sync, generics
       Types/                       Public TypeScript types — touching these is a public-API change
       WABinary/                    Binary node encoding/decoding
