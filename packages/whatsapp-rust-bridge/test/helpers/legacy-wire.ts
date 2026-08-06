@@ -6,10 +6,11 @@
  * throws instead of silently passing.
  *
  * To re-record after adding a case: `pnpm add -D baileys@7.0.0-rc.9`, run
- * `RECORD_LEGACY_VECTORS=1 pnpm test parity`, commit the JSON, drop the dep.
+ * `RECORD_LEGACY_VECTORS=1 pnpm test parity -- --runInBand`, commit the JSON,
+ * then drop the dep again.
  */
 import { createRequire } from "node:module";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,33 +26,37 @@ const vectors: { encoded: Record<string, string>; decoded: Record<string, string
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const legacy: any = recording ? createRequire(import.meta.url)("baileys") : undefined;
-/** Merged on every write: jest may run these files in separate workers. */
+/** Recording must run single-threaded (`--runInBand`); this merge is not atomic. */
 const persist = () => {
   const onDisk = existsSync(store)
     ? JSON.parse(readFileSync(store, "utf8"))
     : { encoded: {}, decoded: {} };
-  writeFileSync(
-    store,
-    JSON.stringify({
-      encoded: { ...onDisk.encoded, ...vectors.encoded },
-      decoded: { ...onDisk.decoded, ...vectors.decoded },
-    }),
-  );
+  const merged = JSON.stringify({
+    encoded: { ...onDisk.encoded, ...vectors.encoded },
+    decoded: { ...onDisk.decoded, ...vectors.decoded },
+  });
+  writeFileSync(store + ".tmp", merged);
+  renameSync(store + ".tmp", store);
 };
 
-/** Key order is significant: the wire format encodes attributes in order. */
-const canon = (value: unknown): string =>
-  JSON.stringify(value, (_, v) => {
-    if (v instanceof Uint8Array || Buffer.isBuffer(v)) {
-      return { __b: Buffer.from(v as Uint8Array).toString("base64") };
-    }
-    return v;
-  });
+/**
+ * Key order is significant: the wire format encodes attributes in order.
+ *
+ * Buffers serialize as `{ type: 'Buffer', data: [...] }` because `toJSON` runs
+ * before any replacer would, so that is the shape stored and revived.
+ */
+const canon = (value: unknown): string => JSON.stringify(value);
+
+type BufferJson = { type: "Buffer"; data: number[] };
+
+const isBufferJson = (value: unknown): value is BufferJson =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as BufferJson).type === "Buffer" &&
+  Array.isArray((value as BufferJson).data);
 
 const revive = (value: unknown): unknown => {
-  if (value && typeof value === "object" && "__b" in (value as object)) {
-    return Buffer.from((value as { __b: string }).__b, "base64");
-  }
+  if (isBufferJson(value)) return Buffer.from(value.data);
   if (Array.isArray(value)) return value.map(revive);
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as object).map(([k, v]) => [k, revive(v)]));
@@ -73,7 +78,7 @@ export function encodeBinaryNode(node: Node): Uint8Array {
   return new Uint8Array(Buffer.from(hit, "base64"));
 }
 
-export async function decodeBinaryNode(buffer: Uint8Array): Promise<unknown> {
+export async function decodeBinaryNode(buffer: Uint8Array): Promise<Node> {
   const key = Buffer.from(buffer).toString("base64");
   if (recording) {
     const out = await legacy.decodeBinaryNode(buffer);
@@ -84,5 +89,5 @@ export async function decodeBinaryNode(buffer: Uint8Array): Promise<unknown> {
 
   const hit = vectors.decoded[key];
   if (!hit) throw new Error("no recorded rc.9 decoding for this frame");
-  return revive(JSON.parse(hit));
+  return revive(JSON.parse(hit)) as Node;
 }

@@ -74,10 +74,9 @@ function snapshotOf(
   } as SignalSnapshot;
 }
 
-/** Opens a session from alice towards bob using the callback API (setup only). */
+/** Opens a session from alice towards bob (setup only). */
 async function establish(alice: Party, bob: Party, bobAddr: ProtocolAddress) {
-  // The same call the consumer makes; SessionBuilder is gone with the rest of
-  // the callback-based session path.
+  // The same call the consumer makes.
   const out = await processBundleWithSnapshot(snapshotOf(alice), bobAddr, {
     registrationId: bob.registrationId,
     identityKey: prefixed(bob.identity.public),
