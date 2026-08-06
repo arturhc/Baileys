@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals'
 import P from 'pino'
 import { importLegacySessionRecordV1, projectLegacySessionRecordV1 } from 'whatsapp-rust-bridge'
+import { hasOpenLegacySession } from '../../Signal/legacy-session'
 import { fromTypedRecord, toTypedRecord } from '../../Signal/legacy-session-codec'
 import { makeLibSignalRepository } from '../../Signal/libsignal'
 import type { SignalAuthState, SignalDataSet, SignalDataTypeMap, SignalKeyStore } from '../../Types'
@@ -165,5 +166,40 @@ describe('legacy session codec', () => {
 		})
 
 		expect(Buffer.from(second)).toEqual(Buffer.from(first))
+	})
+})
+
+/**
+ * libsignal's own deserialize runs a v1 migration that copies a record-level
+ * `registrationId` onto every entry that lacks one. An auth state written
+ * before that migration still has the id only at the top, and reading such a
+ * record as if the entries were unusable drops sessions that are live.
+ */
+describe('pre-v1 legacy records', () => {
+	const preV1 = () => {
+		const record = JSON.parse(JSON.stringify(legacyBobSession)) as {
+			_sessions: Record<string, { registrationId?: number }>
+			registrationId?: number
+		}
+		const [entry] = Object.values(record._sessions)
+		record.registrationId = entry!.registrationId
+		delete entry!.registrationId
+		return record
+	}
+
+	it('counts the session as open using the record-level id', () => {
+		const record = preV1()
+
+		expect(Object.values(record._sessions)[0]!.registrationId).toBeUndefined()
+		expect(hasOpenLegacySession(record as never)).toBe(true)
+	})
+
+	it('imports it instead of reporting no session', () => {
+		const bytes = importLegacySessionRecordV1(toTypedRecord(preV1() as never), {
+			identityKey: generateSignalPubKey(bobCreds.signedIdentityKey.public),
+			registrationId: bobCreds.registrationId
+		})
+
+		expect(bytes.length).toBeGreaterThan(0)
 	})
 })

@@ -76,15 +76,16 @@ const toTypedChain = (ratchetKey: string, chain: LegacyChainJson): LegacySession
 	}
 }
 
-const toTypedSession = (entry: LegacyEntryJson): LegacySessionV1 => {
+const toTypedSession = (entry: LegacyEntryJson, recordRegistrationId?: number): LegacySessionV1 => {
 	const ratchet = entry.currentRatchet
 	const index = entry.indexInfo
-	if (!ratchet || !index || typeof entry.registrationId !== 'number') {
+	const registrationId = typeof entry.registrationId === 'number' ? entry.registrationId : recordRegistrationId
+	if (!ratchet || !index || typeof registrationId !== 'number') {
 		throw new TypeError('legacy session: entry is missing registrationId/currentRatchet/indexInfo')
 	}
 
 	return {
-		registrationId: entry.registrationId,
+		registrationId,
 		ratchet: {
 			keyPair: {
 				public: decode(ratchet.ephemeralKeyPair?.pubKey, 'ephemeralKeyPair.pubKey'),
@@ -122,7 +123,7 @@ export const toTypedRecord = (record: LegacySessionRecord): LegacySessionRecordV
 		.filter((pair): pair is [string, LegacyEntryJson] => pair[1] !== undefined && pair[1] !== null)
 		.map(([indexKey, entry]) => ({
 			indexKey: decode(indexKey, 'session index key'),
-			session: toTypedSession(entry)
+			session: toTypedSession(entry, record.registrationId)
 		}))
 
 	return { sessions }

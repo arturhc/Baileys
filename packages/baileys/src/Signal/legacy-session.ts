@@ -23,6 +23,12 @@ export type LegacySessionEntry = {
 export type LegacySessionRecord = {
 	_sessions?: { [baseKey: string]: LegacySessionEntry | undefined }
 	version?: string
+	/**
+	 * Pre-v1 records carry the id here instead of on each entry. libsignal's
+	 * deserialize copies it down as a migration, so a record in that shape has
+	 * live sessions that look unusable until the same thing is done here.
+	 */
+	registrationId?: number
 }
 
 /** libsignal marks a live session with `closed === -1`. */
@@ -31,8 +37,18 @@ const OPEN = -1
 export const isLegacySessionRecord = (value: unknown): value is LegacySessionRecord =>
 	typeof value === 'object' && value !== null && !ArrayBuffer.isView(value) && '_sessions' in value
 
-const isUsableEntry = (entry: LegacySessionEntry | undefined): entry is LegacySessionEntry =>
-	!!entry && typeof entry.registrationId === 'number' && !!entry.currentRatchet
+/** The entry's own id, or the record's for a pre-v1 shape. */
+export const entryRegistrationId = (
+	entry: LegacySessionEntry | undefined,
+	record: LegacySessionRecord
+): number | undefined =>
+	typeof entry?.registrationId === 'number' ? entry.registrationId : record.registrationId
+
+const isUsableEntry = (
+	entry: LegacySessionEntry | undefined,
+	record: LegacySessionRecord
+): entry is LegacySessionEntry =>
+	!!entry && typeof entryRegistrationId(entry, record) === 'number' && !!entry.currentRatchet
 
 /**
  * The live session state, or undefined when every state is closed (or the
@@ -40,7 +56,7 @@ const isUsableEntry = (entry: LegacySessionEntry | undefined): entry is LegacySe
  */
 export const pickOpenLegacySession = (record: LegacySessionRecord): LegacySessionEntry | undefined => {
 	for (const entry of Object.values(record._sessions || {})) {
-		if (isUsableEntry(entry) && entry.indexInfo?.closed === OPEN) {
+		if (isUsableEntry(entry, record) && entry.indexInfo?.closed === OPEN) {
 			return entry
 		}
 	}
