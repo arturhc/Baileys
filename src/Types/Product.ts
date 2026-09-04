@@ -25,6 +25,25 @@ export type CatalogCollection = {
 	status: CatalogStatus
 }
 
+export type CreateCatalogCollectionOptions = {
+	name: string
+	productIds: string[]
+	catalogSessionId?: string
+}
+
+export type UpdateCatalogCollectionOptions = {
+	collectionId: string
+	name?: string
+	addProductIds?: string[]
+	removeProductIds?: string[]
+	catalogSessionId?: string
+}
+
+export type CatalogCollectionMutationResult = {
+	id: string
+	reviewStatus: string
+}
+
 export type ProductAvailability = 'in stock' | 'out of stock' | 'available for another postcode' | 'unknown'
 
 export type ProductBase = {
