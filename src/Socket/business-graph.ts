@@ -10,6 +10,7 @@ export const BUSINESS_GRAPH_QUERIES = {
 	addProduct: '24249359867999500',
 	editProduct: '9889773371084956',
 	deleteProduct: '9376108569185474',
+	updateCommerceSettings: '9797519763673469',
 	createCollection: '29361942130088470',
 	updateCollection: '24486970300891371',
 	deleteCollections: '29970196299234260'
@@ -188,6 +189,9 @@ export const parseBusinessGraphCatalog = (data: unknown) => {
 	const catalog = objectAt(envelope.product_catalog, 'data.xfb_whatsapp_catalog.product_catalog')
 	const paging = typeof catalog.paging === 'object' && catalog.paging !== null ? objectAt(catalog.paging, 'paging') : {}
 	return {
+		catalogId: optionalString(catalog.catalog_id),
+		catalogName: optionalString(catalog.catalog_name),
+		catalogType: optionalString(catalog.catalog_type),
 		products: objectArray(catalog.products).map((product, index) =>
 			parseBusinessGraphProduct(product, `product_catalog.products[${index}]`)
 		),

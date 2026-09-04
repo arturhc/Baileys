@@ -45,7 +45,8 @@ export const orderMexVariables = (jid: string, orderId: string, token: string) =
 			id: orderId,
 			jid,
 			token: { sensitive_string_value: token },
-			image_dimensions: { width: 100, height: 100 }
+			image_dimensions: { width: 100, height: 100 },
+			direct_connection_encrypted_info: null
 		}
 	}
 })

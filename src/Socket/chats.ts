@@ -52,6 +52,7 @@ import {
 	type BinaryNode,
 	getBinaryNodeChild,
 	getBinaryNodeChildren,
+	getBinaryNodeChildString,
 	isHostedLidUser,
 	isHostedPnUser,
 	isLidUser,
@@ -111,7 +112,9 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		/** AB prop 9666: gate tctoken on profile picture IQs. WA Web default: true. */
 		profilePicPrivacyToken: true,
 		/** AB prop 14303: issue tctokens to LID instead of PN. WA Web default: false. */
-		lidTrustedTokenIssueToLid: false
+		lidTrustedTokenIssueToLid: false,
+		/** AB prop 30797: use the account LID for owner catalog GraphQL operations. */
+		catalogGraphqlUseLid: false
 	}
 
 	let syncState: SyncState = SyncState.Connecting
@@ -504,10 +507,17 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			const email = getBinaryNodeChild(profiles, 'email')
 			const category = getBinaryNodeChild(getBinaryNodeChild(profiles, 'categories'), 'category')
 			const businessHours = getBinaryNodeChild(profiles, 'business_hours')
+			const profileOptions = getBinaryNodeChild(profiles, 'profile_options')
+			const catalogStatus = getBinaryNodeChild(profiles, 'catalog_status')
 			const businessHoursConfig = businessHours
 				? getBinaryNodeChildren(businessHours, 'business_hours_config')
 				: undefined
 			const websiteStr = website?.content?.toString()
+			const profileOptionString = (tag: string) => getBinaryNodeChildString(profileOptions, tag)
+			const profileOptionBoolean = (tag: string) => {
+				const value = profileOptionString(tag)
+				return value === undefined ? undefined : value === 'true'
+			}
 			return {
 				wid: profiles.attrs?.jid,
 				address: address?.content?.toString(),
@@ -518,7 +528,19 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				business_hours: {
 					timezone: businessHours?.attrs?.timezone,
 					business_config: businessHoursConfig?.map(({ attrs }) => attrs as unknown as WABusinessHoursConfig)
-				}
+				},
+				catalog_status: catalogStatus?.attrs?.status,
+				profile_options: profileOptions
+					? {
+							commerce_experience: profileOptionString('commerce_experience'),
+							cart_enabled: profileOptionBoolean('cart_enabled'),
+							shop_url: profileOptionString('shop_url'),
+							commerce_manager_url: profileOptionString('commerce_manager_url'),
+							is_banned: profileOptionBoolean('is_banned'),
+							direct_connection: profileOptionBoolean('direct_connection'),
+							is_profile_edit_disabled: profileOptionBoolean('is_profile_edit_disabled')
+						}
+					: undefined
 			}
 		}
 	}
@@ -1030,6 +1052,11 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		const lidIssueProp = props['14303'] ?? props['lid_trusted_token_issue_to_lid']
 		if (lidIssueProp !== undefined) {
 			serverProps.lidTrustedTokenIssueToLid = lidIssueProp === 'true' || lidIssueProp === '1'
+		}
+
+		const catalogLidProp = props['30797'] ?? props['wa_catalog_graphql_use_lid_enabled']
+		if (catalogLidProp !== undefined) {
+			serverProps.catalogGraphqlUseLid = catalogLidProp === 'true' || catalogLidProp === '1'
 		}
 
 		logger.debug({ serverProps }, 'fetched props')

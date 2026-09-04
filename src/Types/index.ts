@@ -63,6 +63,16 @@ export type WABusinessProfile = {
 	category?: string
 	wid?: string
 	address?: string
+	catalog_status?: string
+	profile_options?: {
+		commerce_experience?: string
+		cart_enabled?: boolean
+		shop_url?: string
+		commerce_manager_url?: string
+		is_banned?: boolean
+		direct_connection?: boolean
+		is_profile_edit_disabled?: boolean
+	}
 }
 
 export type CurveKeyPair = { private: Uint8Array; public: Uint8Array }

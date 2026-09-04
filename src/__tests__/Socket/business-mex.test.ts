@@ -70,7 +70,8 @@ describe('business MEX request variables', () => {
 					id: 'order-1',
 					jid: '5215550000000@s.whatsapp.net',
 					token: { sensitive_string_value: 'token-1' },
-					image_dimensions: { width: 100, height: 100 }
+					image_dimensions: { width: 100, height: 100 },
+					direct_connection_encrypted_info: null
 				}
 			}
 		})

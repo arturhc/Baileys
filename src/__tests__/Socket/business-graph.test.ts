@@ -12,6 +12,7 @@ describe('current owner-catalog GraphQL protocol', () => {
 	it('uses the persisted operations and variable shapes exposed by WhatsApp Web', () => {
 		expect(BUSINESS_GRAPH_QUERIES.catalog).toBe('9957894520961099')
 		expect(BUSINESS_GRAPH_QUERIES.addProduct).toBe('24249359867999500')
+		expect(BUSINESS_GRAPH_QUERIES.updateCommerceSettings).toBe('9797519763673469')
 		expect(catalogGraphRequest('123@lid', 25)).toEqual({
 			request: {
 				product_catalog: {
@@ -75,6 +76,9 @@ describe('current owner-catalog GraphQL protocol', () => {
 		const parsed = parseBusinessGraphCatalog({
 			xfb_whatsapp_catalog: {
 				product_catalog: {
+					catalog_id: 'catalog-1',
+					catalog_name: 'Menú',
+					catalog_type: 'PRODUCT',
 					products: [
 						{
 							id: '1',
@@ -92,6 +96,7 @@ describe('current owner-catalog GraphQL protocol', () => {
 			}
 		})
 		expect(parsed.products[0]).toMatchObject({ id: '1', name: 'Torta', price: 85000, availability: 'in stock' })
+		expect(parsed).toMatchObject({ catalogId: 'catalog-1', catalogName: 'Menú', catalogType: 'PRODUCT' })
 		expect(parsed.nextPageCursor).toBe('next')
 	})
 

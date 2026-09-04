@@ -145,7 +145,12 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 		throw new Boom('Unable to authenticate business GraphQL request', { statusCode: 401 })
 	}
 
-	const ownBusinessJid = () => jidNormalizedUser(authState.creds.me?.id || authState.creds.me?.lid || '')
+	const ownBusinessJid = () =>
+		jidNormalizedUser(
+			sock.serverProps.catalogGraphqlUseLid
+				? authState.creds.me?.lid || authState.creds.me?.id || ''
+				: authState.creds.me?.id || authState.creds.me?.lid || ''
+		)
 	const isOwnBusinessJid = (jid: string) => {
 		const normalized = jidNormalizedUser(jid)
 		return [authState.creds.me?.id, authState.creds.me?.lid]
@@ -322,6 +327,16 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 		return { created: envelope?.success === true }
 	}
 
+	const updateCartEnabled = async (enabled: boolean) => {
+		const data = await executeBusinessGraph<Record<string, unknown>>(BUSINESS_GRAPH_QUERIES.updateCommerceSettings, {
+			input: { biz_jid: ownBusinessJid(), cart_enabled: enabled }
+		})
+		const envelope = data.xfb_whatsapp_smb_commerce_settings as Record<string, unknown> | undefined
+		if (typeof envelope?.cart_enabled !== 'boolean')
+			throw new Boom('Update commerce settings response did not contain cart_enabled', { statusCode: 502 })
+		return { cartEnabled: envelope.cart_enabled }
+	}
+
 	const getCollections = async (jid?: string, limit = 51, cursor?: string) => {
 		jid = jid || authState.creds.me?.id
 		jid = jidNormalizedUser(jid)
@@ -343,15 +358,28 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 	}
 
 	const getOrderDetails = async (orderId: string, tokenBase64: string, jid?: string) => {
-		jid = jid || authState.creds.me?.id
-		jid = jidNormalizedUser(jid)
 		const mex = BUSINESS_MEX_QUERIES.order
-		const result = await executeWMexQuery<unknown>(
-			orderMexVariables(jid, orderId, tokenBase64),
-			mex.queryId,
-			mex.dataPath
-		)
-		return parseMexOrderDetails(result)
+		const ownAliases = [authState.creds.me?.id, authState.creds.me?.lid]
+			.filter((value): value is string => !!value)
+			.map(jidNormalizedUser)
+		const requested = jidNormalizedUser(jid || ownBusinessJid())
+		const candidates = [...new Set([requested, ...(ownAliases.includes(requested) ? ownAliases : [])])]
+		let lastError: unknown
+		for (const [index, candidate] of candidates.entries()) {
+			try {
+				const result = await executeWMexQuery<unknown>(
+					orderMexVariables(candidate, orderId, tokenBase64),
+					mex.queryId,
+					mex.dataPath
+				)
+				return parseMexOrderDetails(result)
+			} catch (error) {
+				lastError = error
+				if (index < candidates.length - 1)
+					config.logger.debug({ orderId, jid: candidate }, 'order lookup failed; trying another own-account alias')
+			}
+		}
+		throw lastError
 	}
 
 	const productUpdate = async (productId: string, update: ProductUpdate) => {
@@ -468,6 +496,7 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 		logger: config.logger,
 		getOrderDetails,
 		createCatalog,
+		updateCartEnabled,
 		getCatalog,
 		getCollections,
 		productCreate,
