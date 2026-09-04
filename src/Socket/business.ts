@@ -1,21 +1,19 @@
 import type { GetCatalogOptions, ProductCreate, ProductUpdate, SocketConfig, WAMediaUpload } from '../Types'
 import type { UpdateBussinesProfileProps } from '../Types/Bussines'
 import { getRawMediaUploadData } from '../Utils'
-import {
-	parseCatalogNode,
-	parseCollectionsNode,
-	parseOrderDetailsNode,
-	parseProductNode,
-	toProductNode,
-	uploadingNecessaryImagesOfProduct
-} from '../Utils/business'
+import { parseProductNode, toProductNode, uploadingNecessaryImagesOfProduct } from '../Utils/business'
+import { parseMexCatalog, parseMexCollections, parseMexOrderDetails } from '../Utils/business-mex'
 import { type BinaryNode, jidNormalizedUser, S_WHATSAPP_NET } from '../WABinary'
 import { getBinaryNodeChild } from '../WABinary/generic-utils'
+import { BUSINESS_MEX_QUERIES, catalogMexVariables, collectionsMexVariables, orderMexVariables } from './business-mex'
 import { makeMessagesRecvSocket } from './messages-recv'
+import { executeWMexQuery as genericExecuteWMexQuery } from './mex'
 
 export const makeBusinessSocket = (config: SocketConfig) => {
 	const sock = makeMessagesRecvSocket(config)
-	const { authState, query, waUploadToServer } = sock
+	const { authState, generateMessageTag, query, waUploadToServer } = sock
+	const executeWMexQuery = <T>(variables: Record<string, unknown>, queryId: string, dataPath: string): Promise<T> =>
+		genericExecuteWMexQuery<T>(variables, queryId, dataPath, query, generateMessageTag)
 
 	const updateBussinesProfile = async (args: UpdateBussinesProfileProps) => {
 		const node: BinaryNode[] = []
@@ -157,144 +155,37 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 	const getCatalog = async ({ jid, limit, cursor }: GetCatalogOptions) => {
 		jid = jid || authState.creds.me?.id
 		jid = jidNormalizedUser(jid)
-
-		const queryParamNodes: BinaryNode[] = [
-			{
-				tag: 'limit',
-				attrs: {},
-				content: Buffer.from((limit || 10).toString())
-			},
-			{
-				tag: 'width',
-				attrs: {},
-				content: Buffer.from('100')
-			},
-			{
-				tag: 'height',
-				attrs: {},
-				content: Buffer.from('100')
-			}
-		]
-
-		if (cursor) {
-			queryParamNodes.push({
-				tag: 'after',
-				attrs: {},
-				content: cursor
-			})
-		}
-
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'get',
-				xmlns: 'w:biz:catalog'
-			},
-			content: [
-				{
-					tag: 'product_catalog',
-					attrs: {
-						jid,
-						allow_shop_source: 'true'
-					},
-					content: queryParamNodes
-				}
-			]
-		})
-		return parseCatalogNode(result)
+		const mex = BUSINESS_MEX_QUERIES.catalog
+		const result = await executeWMexQuery<unknown>(
+			catalogMexVariables(jid, limit || 10, cursor),
+			mex.queryId,
+			mex.dataPath
+		)
+		return parseMexCatalog(result)
 	}
 
-	const getCollections = async (jid?: string, limit = 51) => {
+	const getCollections = async (jid?: string, limit = 51, cursor?: string) => {
 		jid = jid || authState.creds.me?.id
 		jid = jidNormalizedUser(jid)
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'get',
-				xmlns: 'w:biz:catalog',
-				smax_id: '35'
-			},
-			content: [
-				{
-					tag: 'collections',
-					attrs: {
-						biz_jid: jid
-					},
-					content: [
-						{
-							tag: 'collection_limit',
-							attrs: {},
-							content: Buffer.from(limit.toString())
-						},
-						{
-							tag: 'item_limit',
-							attrs: {},
-							content: Buffer.from(limit.toString())
-						},
-						{
-							tag: 'width',
-							attrs: {},
-							content: Buffer.from('100')
-						},
-						{
-							tag: 'height',
-							attrs: {},
-							content: Buffer.from('100')
-						}
-					]
-				}
-			]
-		})
-
-		return parseCollectionsNode(result)
+		const mex = BUSINESS_MEX_QUERIES.collections
+		const result = await executeWMexQuery<unknown>(
+			collectionsMexVariables(jid, limit, cursor),
+			mex.queryId,
+			mex.dataPath
+		)
+		return parseMexCollections(result)
 	}
 
-	const getOrderDetails = async (orderId: string, tokenBase64: string) => {
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'get',
-				xmlns: 'fb:thrift_iq',
-				smax_id: '5'
-			},
-			content: [
-				{
-					tag: 'order',
-					attrs: {
-						op: 'get',
-						id: orderId
-					},
-					content: [
-						{
-							tag: 'image_dimensions',
-							attrs: {},
-							content: [
-								{
-									tag: 'width',
-									attrs: {},
-									content: Buffer.from('100')
-								},
-								{
-									tag: 'height',
-									attrs: {},
-									content: Buffer.from('100')
-								}
-							]
-						},
-						{
-							tag: 'token',
-							attrs: {},
-							content: Buffer.from(tokenBase64)
-						}
-					]
-				}
-			]
-		})
-
-		return parseOrderDetailsNode(result)
+	const getOrderDetails = async (orderId: string, tokenBase64: string, jid?: string) => {
+		jid = jid || authState.creds.me?.id
+		jid = jidNormalizedUser(jid)
+		const mex = BUSINESS_MEX_QUERIES.order
+		const result = await executeWMexQuery<unknown>(
+			orderMexVariables(jid, orderId, tokenBase64),
+			mex.queryId,
+			mex.dataPath
+		)
+		return parseMexOrderDetails(result)
 	}
 
 	const productUpdate = async (productId: string, update: ProductUpdate) => {

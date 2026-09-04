@@ -25,7 +25,7 @@ export type CatalogCollection = {
 	status: CatalogStatus
 }
 
-export type ProductAvailability = 'in stock'
+export type ProductAvailability = 'in stock' | 'out of stock' | 'available for another postcode' | 'unknown'
 
 export type ProductBase = {
 	name: string
