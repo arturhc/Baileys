@@ -46,6 +46,10 @@ const numberAt = (value: unknown, operation: string, path: string): number => {
 		return malformed(operation, `${path} is not numeric`)
 	}
 
+	if (typeof value === 'string' && !value.trim()) {
+		return malformed(operation, `${path} is not numeric`)
+	}
+
 	const parsed = Number(value)
 	if (!Number.isFinite(parsed)) {
 		return malformed(operation, `${path} is not numeric`)
@@ -164,8 +168,8 @@ export const parseMexCollections = (value: unknown) => {
 
 export const parseMexOrderDetails = (value: unknown): OrderDetails => {
 	const operation = 'order'
-	const response = objectAt(value, operation, 'response')!
-	const order = objectAt(response.order, operation, 'order')!
+	const payload = objectAt(value, operation, 'payload')!
+	const order = objectAt(payload.order, operation, 'order')!
 	const priceDetails = objectAt(order.price_details, operation, 'order.price_details')!
 	const products = objectArrayAt(order.products, operation, 'order.products').map<OrderProduct>((product, index) => {
 		const path = `order.products[${index}]`

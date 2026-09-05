@@ -1,7 +1,6 @@
 import { Boom } from '@hapi/boom'
 import { parseMexOrderDetails } from '../Utils/business-mex'
-import type { ILogger } from '../Utils/logger'
-import { jidNormalizedUser } from '../WABinary'
+import { isLidUser, isPnUser, jidNormalizedUser } from '../WABinary'
 
 export const BUSINESS_MEX_QUERIES = {
 	catalog: {
@@ -64,27 +63,17 @@ type FetchMexOrderDetailsOptions = {
 	requestedJid: string
 	ownJids: readonly (string | undefined)[]
 	executeQuery: ExecuteMexQuery
-	logger: Pick<ILogger, 'debug'>
 }
 
-export const getOrderMexJidCandidates = (requestedJid: string, ownJids: readonly (string | undefined)[]) => {
+export const resolveOrderMexJid = (requestedJid: string, ownJids: readonly (string | undefined)[]) => {
 	const requested = jidNormalizedUser(requestedJid)
-	if (!requested) return []
+	if (!requested) return undefined
 
 	const ownAliases = ownJids.map(jidNormalizedUser).filter((jid): jid is string => !!jid)
-	return [...new Set([requested, ...(ownAliases.includes(requested) ? ownAliases : [])])]
-}
+	const ownPn = ownAliases.find(isPnUser)
+	const requestedIsOwnLid = isLidUser(requested) && ownAliases.includes(requested)
 
-export const isMexOrderAliasFallbackError = (error: unknown) => {
-	if (!(error instanceof Boom) || error.output.statusCode !== 400) return false
-	if (!error.message.startsWith('GraphQL server error:')) return false
-
-	const data = error.data
-	if (typeof data !== 'object' || data === null || Array.isArray(data)) return false
-	const extensions = 'extensions' in data ? data.extensions : undefined
-	if (typeof extensions !== 'object' || extensions === null || Array.isArray(extensions)) return false
-
-	return 'error_code' in extensions && extensions.error_code === 400
+	return requestedIsOwnLid && ownPn ? ownPn : requested
 }
 
 export const fetchMexOrderDetails = async ({
@@ -92,23 +81,13 @@ export const fetchMexOrderDetails = async ({
 	token,
 	requestedJid,
 	ownJids,
-	executeQuery,
-	logger
+	executeQuery
 }: FetchMexOrderDetailsOptions) => {
-	const candidates = getOrderMexJidCandidates(requestedJid, ownJids)
-	if (!candidates.length) throw new Boom('Order details require a valid seller JID', { statusCode: 400 })
+	// WhatsApp Web derives this value from the current user. Incoming orders may carry the same account's LID instead.
+	const jid = resolveOrderMexJid(requestedJid, ownJids)
+	if (!jid) throw new Boom('Order details require a valid seller JID', { statusCode: 400 })
 
 	const query = BUSINESS_MEX_QUERIES.order
-	for (const [index, candidate] of candidates.entries()) {
-		try {
-			const result = await executeQuery(orderMexVariables(candidate, orderId, token), query.queryId, query.dataPath)
-			return parseMexOrderDetails(result)
-		} catch (error) {
-			const hasAnotherAlias = index < candidates.length - 1
-			if (!hasAnotherAlias || !isMexOrderAliasFallbackError(error)) throw error
-			logger.debug({ orderId, attempt: index + 1 }, 'order lookup rejected own-account alias; trying the next alias')
-		}
-	}
-
-	throw new Boom('Order lookup did not attempt a seller JID', { statusCode: 500 })
+	const result = await executeQuery(orderMexVariables(jid, orderId, token), query.queryId, query.dataPath)
+	return parseMexOrderDetails(result)
 }
