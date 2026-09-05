@@ -1,6 +1,7 @@
 import { Boom } from '@hapi/boom'
+import type { ILogger } from '../Utils/logger'
 import { parseMexOrderDetails } from '../Utils/business-mex'
-import { isLidUser, isPnUser, jidNormalizedUser } from '../WABinary'
+import { areJidsSameUser, isLidUser, isPnUser, jidNormalizedUser } from '../WABinary'
 
 export const BUSINESS_MEX_QUERIES = {
 	catalog: {
@@ -63,6 +64,7 @@ type FetchMexOrderDetailsOptions = {
 	requestedJid: string
 	ownJids: readonly (string | undefined)[]
 	executeQuery: ExecuteMexQuery
+	logger: ILogger
 }
 
 export const resolveOrderMexJid = (requestedJid: string, ownJids: readonly (string | undefined)[]) => {
@@ -71,7 +73,8 @@ export const resolveOrderMexJid = (requestedJid: string, ownJids: readonly (stri
 
 	const ownAliases = ownJids.map(jidNormalizedUser).filter((jid): jid is string => !!jid)
 	const ownPn = ownAliases.find(isPnUser)
-	const requestedIsOwnLid = isLidUser(requested) && ownAliases.includes(requested)
+	const requestedIsOwnLid =
+		isLidUser(requested) && ownAliases.some(ownJid => isLidUser(ownJid) && areJidsSameUser(ownJid, requested))
 
 	return requestedIsOwnLid && ownPn ? ownPn : requested
 }
@@ -81,13 +84,15 @@ export const fetchMexOrderDetails = async ({
 	token,
 	requestedJid,
 	ownJids,
-	executeQuery
+	executeQuery,
+	logger
 }: FetchMexOrderDetailsOptions) => {
-	// WhatsApp Web derives this value from the current user. Incoming orders may carry the same account's LID instead.
+	// Resolve known local aliases before the single request; MEX failures must never select another JID.
 	const jid = resolveOrderMexJid(requestedJid, ownJids)
 	if (!jid) throw new Boom('Order details require a valid seller JID', { statusCode: 400 })
 
 	const query = BUSINESS_MEX_QUERIES.order
+	logger.debug({ queryId: query.queryId }, 'querying order details through MEX')
 	const result = await executeQuery(orderMexVariables(jid, orderId, token), query.queryId, query.dataPath)
 	return parseMexOrderDetails(result)
 }

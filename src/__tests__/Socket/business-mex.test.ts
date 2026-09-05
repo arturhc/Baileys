@@ -9,6 +9,17 @@ import {
 	resolveOrderMexJid
 } from '../../Socket/business-mex'
 import { parseMexCatalog, parseMexCollections, parseMexOrderDetails } from '../../Utils/business-mex'
+import type { ILogger } from '../../Utils/logger'
+
+const logger: ILogger = {
+	level: 'silent',
+	child: () => logger,
+	trace: jest.fn(),
+	debug: jest.fn(),
+	info: jest.fn(),
+	warn: jest.fn(),
+	error: jest.fn()
+}
 
 const product = {
 	id: 'product-1',
@@ -216,7 +227,8 @@ describe('business MEX order lookup', () => {
 			token: 'token-1',
 			requestedJid: '11111111111111@lid',
 			ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
-			executeQuery
+			executeQuery,
+			logger
 		})
 
 		expect(executeQuery).toHaveBeenCalledTimes(1)
@@ -233,7 +245,8 @@ describe('business MEX order lookup', () => {
 				token: 'token-1',
 				requestedJid: '11111111111111@lid',
 				ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
-				executeQuery
+				executeQuery,
+				logger
 			})
 		).rejects.toBe(failure)
 		expect(executeQuery).toHaveBeenCalledTimes(1)
@@ -249,7 +262,8 @@ describe('business MEX order lookup', () => {
 				token: 'token-1',
 				requestedJid: '11111111111111@lid',
 				ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
-				executeQuery
+				executeQuery,
+				logger
 			})
 		).rejects.toBe(failure)
 		expect(executeQuery).toHaveBeenCalledTimes(1)
