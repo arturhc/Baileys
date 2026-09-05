@@ -77,6 +77,14 @@ describe('business order socket', () => {
 		})
 
 		expect(query).toHaveBeenCalledTimes(1)
+		expect(logger.debug).toHaveBeenCalledWith(
+			{
+				queryId: '26593811266898374',
+				orderId: 'order-1',
+				jid: '15550000001@s.whatsapp.net'
+			},
+			'querying order details through MEX'
+		)
 		const request = query.mock.calls[0]![0]
 		expect(request.attrs).toEqual({
 			id: 'message-tag-1',
