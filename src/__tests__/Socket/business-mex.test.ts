@@ -3,9 +3,8 @@ import { jest } from '@jest/globals'
 import {
 	BUSINESS_ORDER_MEX_QUERY,
 	fetchMexOrderDetails,
-	getOrderMexJidCandidates,
-	isMexOrderAliasFallbackError,
-	orderMexVariables
+	orderMexVariables,
+	resolveOrderMexJid
 } from '../../Socket/business-mex'
 import { parseMexOrderDetails } from '../../Utils/business-mex'
 
@@ -57,69 +56,40 @@ describe('business MEX order lookup', () => {
 		})
 	})
 
-	it('normalizes own-account aliases and preserves the requested JID as the first candidate', () => {
-		expect(
-			getOrderMexJidCandidates('11111111111111:7@lid', ['15550000001:4@s.whatsapp.net', '11111111111111:7@lid'])
-		).toEqual(['11111111111111@lid', '15550000001@s.whatsapp.net'])
+	it('resolves the current account LID to its PN for the order query', () => {
+		expect(resolveOrderMexJid('11111111111111:7@lid', ['15550000001:4@s.whatsapp.net', '11111111111111:7@lid'])).toBe(
+			'15550000001@s.whatsapp.net'
+		)
 	})
 
-	it('does not try own-account aliases for another business', () => {
-		expect(
-			getOrderMexJidCandidates('22222222222222@lid', ['15550000001@s.whatsapp.net', '11111111111111@lid'])
-		).toEqual(['22222222222222@lid'])
+	it('preserves PN and external business JIDs', () => {
+		const ownJids = ['15550000001@s.whatsapp.net', '11111111111111@lid']
+
+		expect(resolveOrderMexJid('15550000001:4@s.whatsapp.net', ownJids)).toBe('15550000001@s.whatsapp.net')
+		expect(resolveOrderMexJid('22222222222222@lid', ownJids)).toBe('22222222222222@lid')
 	})
 
-	it('retries a rejected own LID with its PN alias and returns the parsed order', async () => {
+	it('queries once with the resolved PN and returns the parsed order', async () => {
 		const executeQuery = jest.fn(async (variables: Record<string, unknown>) => {
-			if (orderJidFromVariables(variables) === '11111111111111@lid') throw mexBadRequest()
+			expect(orderJidFromVariables(variables)).toBe('15550000001@s.whatsapp.net')
 			return orderResponse
 		})
-		const debug = jest.fn()
 
 		const result = await fetchMexOrderDetails({
 			orderId: 'order-1',
 			token: 'token-1',
 			requestedJid: '11111111111111@lid',
 			ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
-			executeQuery,
-			logger: { debug }
+			executeQuery
 		})
 
-		expect(executeQuery).toHaveBeenCalledTimes(2)
-		expect(orderJidFromVariables(executeQuery.mock.calls[0]![0])).toBe('11111111111111@lid')
-		expect(orderJidFromVariables(executeQuery.mock.calls[1]![0])).toBe('15550000001@s.whatsapp.net')
-		expect(debug).toHaveBeenCalledWith(
-			{ orderId: 'order-1', attempt: 1 },
-			'order lookup rejected own-account alias; trying the next alias'
-		)
+		expect(executeQuery).toHaveBeenCalledTimes(1)
 		expect(result).toEqual(parseMexOrderDetails(orderResponse))
 	})
 
-	it('also retries a rejected own PN with its LID alias', async () => {
-		const executeQuery = jest.fn(async (variables: Record<string, unknown>) => {
-			if (orderJidFromVariables(variables) === '15550000001@s.whatsapp.net') throw mexBadRequest()
-			return orderResponse
-		})
-
-		await fetchMexOrderDetails({
-			orderId: 'order-1',
-			token: 'token-1',
-			requestedJid: '15550000001@s.whatsapp.net',
-			ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
-			executeQuery,
-			logger: { debug: jest.fn() }
-		})
-
-		expect(orderJidFromVariables(executeQuery.mock.calls[0]![0])).toBe('15550000001@s.whatsapp.net')
-		expect(orderJidFromVariables(executeQuery.mock.calls[1]![0])).toBe('11111111111111@lid')
-	})
-
-	it('propagates the final structured error when neither own-account alias resolves the order', async () => {
-		const finalFailure = mexBadRequest()
-		const executeQuery = jest
-			.fn<(variables: Record<string, unknown>) => Promise<unknown>>()
-			.mockRejectedValueOnce(mexBadRequest())
-			.mockRejectedValueOnce(finalFailure)
+	it('propagates GraphQL errors without retrying another alias', async () => {
+		const failure = mexBadRequest()
+		const executeQuery = jest.fn(async () => Promise.reject(failure))
 
 		await expect(
 			fetchMexOrderDetails({
@@ -127,11 +97,10 @@ describe('business MEX order lookup', () => {
 				token: 'token-1',
 				requestedJid: '11111111111111@lid',
 				ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
-				executeQuery,
-				logger: { debug: jest.fn() }
+				executeQuery
 			})
-		).rejects.toBe(finalFailure)
-		expect(executeQuery).toHaveBeenCalledTimes(2)
+		).rejects.toBe(failure)
+		expect(executeQuery).toHaveBeenCalledTimes(1)
 	})
 
 	it('does not retry transport, authentication, or malformed-response failures', async () => {
@@ -144,17 +113,10 @@ describe('business MEX order lookup', () => {
 				token: 'token-1',
 				requestedJid: '11111111111111@lid',
 				ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
-				executeQuery,
-				logger: { debug: jest.fn() }
+				executeQuery
 			})
 		).rejects.toBe(failure)
 		expect(executeQuery).toHaveBeenCalledTimes(1)
-	})
-
-	it('recognizes only structured MEX bad-request errors as alias mismatches', () => {
-		expect(isMexOrderAliasFallbackError(mexBadRequest())).toBe(true)
-		expect(isMexOrderAliasFallbackError(new Boom('Bad Request', { statusCode: 400 }))).toBe(false)
-		expect(isMexOrderAliasFallbackError(new Error('GraphQL server error: Bad Request'))).toBe(false)
 	})
 
 	it('rejects malformed order responses with a 502 Boom', () => {
@@ -164,5 +126,43 @@ describe('business MEX order lookup', () => {
 		} catch (error) {
 			expect((error as Boom).output.statusCode).toBe(502)
 		}
+	})
+
+	it('parses the unwrapped MEX data-path payload', () => {
+		expect(parseMexOrderDetails(orderResponse)).toEqual({
+			price: { currency: 'MXN', total: 300000 },
+			products: [
+				{
+					id: 'product-1',
+					name: 'Notebook',
+					currency: 'MXN',
+					price: 150000,
+					quantity: 2,
+					imageUrl: 'https://example.invalid/thumb.jpg'
+				}
+			]
+		})
+	})
+
+	it.each(['', '   '])('rejects a blank product price %j with a 502 Boom', value => {
+		const malformed = structuredClone(orderResponse)
+		malformed.order.products[0]!.price = value
+
+		expect(() => parseMexOrderDetails(malformed)).toThrow(Boom)
+		try {
+			parseMexOrderDetails(malformed)
+		} catch (error) {
+			expect((error as Boom).output.statusCode).toBe(502)
+		}
+	})
+
+	it('rejects blank quantity and total values', () => {
+		const blankQuantity = structuredClone(orderResponse)
+		blankQuantity.order.products[0]!.quantity = ''
+		const blankTotal = structuredClone(orderResponse)
+		blankTotal.order.price_details.total_amount = ' '
+
+		expect(() => parseMexOrderDetails(blankQuantity)).toThrow(Boom)
+		expect(() => parseMexOrderDetails(blankTotal)).toThrow(Boom)
 	})
 })
