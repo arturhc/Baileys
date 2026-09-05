@@ -40,8 +40,7 @@ const numberAt = (value: unknown, path: string): number => {
 }
 
 export const parseMexOrderDetails = (value: unknown): OrderDetails => {
-	const payload = objectAt(value, 'payload')!
-	const order = objectAt(payload.order, 'order')!
+	const order = objectAt(objectAt(value, 'MEX data-path result')!.order, 'order')!
 	const priceDetails = objectAt(order.price_details, 'order.price_details')!
 	const products = objectArrayAt(order.products, 'order.products').map<OrderProduct>((product, index) => {
 		const path = `order.products[${index}]`

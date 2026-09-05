@@ -260,7 +260,8 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 			token: tokenBase64,
 			requestedJid: jid || authState.creds.me?.id || authState.creds.me?.lid || '',
 			ownJids: [authState.creds.me?.id, authState.creds.me?.lid],
-			executeQuery: executeWMexQuery
+			executeQuery: executeWMexQuery,
+			logger: config.logger
 		})
 	}
 
