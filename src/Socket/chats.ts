@@ -516,8 +516,10 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			const profileOptionString = (tag: string) => getBinaryNodeChildString(profileOptions, tag)
 			const profileOptionBoolean = (tag: string) => {
 				const value = profileOptionString(tag)
+
 				return value === undefined ? undefined : value === 'true'
 			}
+
 			return {
 				wid: profiles.attrs?.jid,
 				address: address?.content?.toString(),

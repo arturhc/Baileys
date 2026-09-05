@@ -12,7 +12,7 @@ import type {
 import type { UpdateBussinesProfileProps } from '../Types/Bussines'
 import { getRawMediaUploadData } from '../Utils'
 import { uploadingNecessaryImagesOfProduct } from '../Utils/business'
-import { parseMexCatalog, parseMexCollections, parseMexOrderDetails } from '../Utils/business-mex'
+import { parseMexCatalog, parseMexCollections } from '../Utils/business-mex'
 import { type BinaryNode, jidDecode, jidNormalizedUser, S_WHATSAPP_NET } from '../WABinary'
 import { getBinaryNodeChild, getBinaryNodeChildString } from '../WABinary/generic-utils'
 import {
@@ -27,7 +27,12 @@ import {
 	parseBusinessGraphProduct,
 	productGraphInput
 } from './business-graph'
-import { BUSINESS_MEX_QUERIES, catalogMexVariables, collectionsMexVariables, orderMexVariables } from './business-mex'
+import {
+	BUSINESS_MEX_QUERIES,
+	catalogMexVariables,
+	collectionsMexVariables,
+	fetchMexOrderDetails
+} from './business-mex'
 import { makeMessagesRecvSocket } from './messages-recv'
 import { executeWMexQuery as genericExecuteWMexQuery } from './mex'
 
@@ -358,28 +363,14 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 	}
 
 	const getOrderDetails = async (orderId: string, tokenBase64: string, jid?: string) => {
-		const mex = BUSINESS_MEX_QUERIES.order
-		const ownAliases = [authState.creds.me?.id, authState.creds.me?.lid]
-			.filter((value): value is string => !!value)
-			.map(jidNormalizedUser)
-		const requested = jidNormalizedUser(jid || ownBusinessJid())
-		const candidates = [...new Set([requested, ...(ownAliases.includes(requested) ? ownAliases : [])])]
-		let lastError: unknown
-		for (const [index, candidate] of candidates.entries()) {
-			try {
-				const result = await executeWMexQuery<unknown>(
-					orderMexVariables(candidate, orderId, tokenBase64),
-					mex.queryId,
-					mex.dataPath
-				)
-				return parseMexOrderDetails(result)
-			} catch (error) {
-				lastError = error
-				if (index < candidates.length - 1)
-					config.logger.debug({ orderId, jid: candidate }, 'order lookup failed; trying another own-account alias')
-			}
-		}
-		throw lastError
+		return fetchMexOrderDetails({
+			orderId,
+			token: tokenBase64,
+			requestedJid: jid || ownBusinessJid(),
+			ownJids: [authState.creds.me?.id, authState.creds.me?.lid],
+			executeQuery: executeWMexQuery,
+			logger: config.logger
+		})
 	}
 
 	const productUpdate = async (productId: string, update: ProductUpdate) => {

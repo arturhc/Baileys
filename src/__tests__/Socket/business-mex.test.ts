@@ -1,8 +1,12 @@
 import { Boom } from '@hapi/boom'
+import { jest } from '@jest/globals'
 import {
 	BUSINESS_MEX_QUERIES,
 	catalogMexVariables,
 	collectionsMexVariables,
+	fetchMexOrderDetails,
+	getOrderMexJidCandidates,
+	isMexOrderAliasFallbackError,
 	orderMexVariables
 } from '../../Socket/business-mex'
 import { parseMexCatalog, parseMexCollections, parseMexOrderDetails } from '../../Utils/business-mex'
@@ -26,6 +30,35 @@ const product = {
 		]
 	}
 }
+
+const orderResponse = {
+	order: {
+		price_details: { currency: 'MXN', total_amount: '300000' },
+		products: [
+			{
+				id: 'product-1',
+				name: 'Notebook',
+				currency: 'MXN',
+				price: '150000',
+				quantity: '2',
+				media: { images: [{ request_image_url: 'https://example.invalid/thumb.jpg' }] }
+			}
+		]
+	}
+}
+
+const orderJidFromVariables = (variables: Record<string, unknown>) =>
+	(variables.request as { order: { jid: string } }).order.jid
+
+const mexBadRequest = () =>
+	new Boom('GraphQL server error: Bad Request', {
+		statusCode: 400,
+		data: {
+			message: 'Bad Request',
+			extensions: { error_code: 400, is_retryable: false, severity: 'CRITICAL' },
+			path: []
+		}
+	})
 
 describe('business MEX request variables', () => {
 	it('uses the current persisted queries and stringifies catalog dimensions', () => {
@@ -129,21 +162,7 @@ describe('business MEX response parsing', () => {
 	})
 
 	it('maps order totals and line items', () => {
-		const result = parseMexOrderDetails({
-			order: {
-				price_details: { currency: 'MXN', total_amount: '300000' },
-				products: [
-					{
-						id: 'product-1',
-						name: 'Notebook',
-						currency: 'MXN',
-						price: '150000',
-						quantity: '2',
-						media: { images: [{ request_image_url: 'https://example.invalid/thumb.jpg' }] }
-					}
-				]
-			}
-		})
+		const result = parseMexOrderDetails(orderResponse)
 
 		expect(result).toEqual({
 			price: { currency: 'MXN', total: 300000 },
@@ -170,5 +189,108 @@ describe('business MEX response parsing', () => {
 
 		expect(captured).toBeInstanceOf(Boom)
 		expect((captured as Boom).output.statusCode).toBe(502)
+	})
+})
+
+describe('business MEX order lookup', () => {
+	it('normalizes own-account aliases and preserves the requested JID as the first candidate', () => {
+		expect(
+			getOrderMexJidCandidates('11111111111111:7@lid', ['15550000001:4@s.whatsapp.net', '11111111111111:7@lid'])
+		).toEqual(['11111111111111@lid', '15550000001@s.whatsapp.net'])
+	})
+
+	it('does not try own-account aliases for another business', () => {
+		expect(
+			getOrderMexJidCandidates('22222222222222@lid', ['15550000001@s.whatsapp.net', '11111111111111@lid'])
+		).toEqual(['22222222222222@lid'])
+	})
+
+	it('retries a rejected own LID with its PN alias and returns the parsed order', async () => {
+		const executeQuery = jest.fn(async (variables: Record<string, unknown>) => {
+			if (orderJidFromVariables(variables) === '11111111111111@lid') throw mexBadRequest()
+			return orderResponse
+		})
+		const debug = jest.fn()
+
+		const result = await fetchMexOrderDetails({
+			orderId: 'order-1',
+			token: 'token-1',
+			requestedJid: '11111111111111@lid',
+			ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
+			executeQuery,
+			logger: { debug }
+		})
+
+		expect(executeQuery).toHaveBeenCalledTimes(2)
+		expect(orderJidFromVariables(executeQuery.mock.calls[0]![0])).toBe('11111111111111@lid')
+		expect(orderJidFromVariables(executeQuery.mock.calls[1]![0])).toBe('15550000001@s.whatsapp.net')
+		expect(debug).toHaveBeenCalledWith(
+			{ orderId: 'order-1', attempt: 1 },
+			'order lookup rejected own-account alias; trying the next alias'
+		)
+		expect(result.price).toEqual({ currency: 'MXN', total: 300000 })
+	})
+
+	it('also retries a rejected own PN with its LID alias', async () => {
+		const executeQuery = jest.fn(async (variables: Record<string, unknown>) => {
+			if (orderJidFromVariables(variables) === '15550000001@s.whatsapp.net') throw mexBadRequest()
+			return orderResponse
+		})
+
+		await fetchMexOrderDetails({
+			orderId: 'order-1',
+			token: 'token-1',
+			requestedJid: '15550000001@s.whatsapp.net',
+			ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
+			executeQuery,
+			logger: { debug: jest.fn() }
+		})
+
+		expect(orderJidFromVariables(executeQuery.mock.calls[0]![0])).toBe('15550000001@s.whatsapp.net')
+		expect(orderJidFromVariables(executeQuery.mock.calls[1]![0])).toBe('11111111111111@lid')
+	})
+
+	it('propagates the final structured error when neither own-account alias resolves the order', async () => {
+		const firstFailure = mexBadRequest()
+		const finalFailure = mexBadRequest()
+		const executeQuery = jest
+			.fn<(variables: Record<string, unknown>) => Promise<unknown>>()
+			.mockRejectedValueOnce(firstFailure)
+			.mockRejectedValueOnce(finalFailure)
+
+		await expect(
+			fetchMexOrderDetails({
+				orderId: 'order-1',
+				token: 'token-1',
+				requestedJid: '11111111111111@lid',
+				ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
+				executeQuery,
+				logger: { debug: jest.fn() }
+			})
+		).rejects.toBe(finalFailure)
+		expect(executeQuery).toHaveBeenCalledTimes(2)
+	})
+
+	it('does not retry transport, authentication, or malformed-response failures', async () => {
+		const failure = new Boom('Business request unavailable', { statusCode: 503 })
+		const executeQuery = jest.fn(async () => Promise.reject(failure))
+
+		await expect(
+			fetchMexOrderDetails({
+				orderId: 'order-1',
+				token: 'token-1',
+				requestedJid: '11111111111111@lid',
+				ownJids: ['15550000001@s.whatsapp.net', '11111111111111@lid'],
+				executeQuery,
+				logger: { debug: jest.fn() }
+			})
+		).rejects.toBe(failure)
+		expect(executeQuery).toHaveBeenCalledTimes(1)
+	})
+
+	it('recognizes only structured MEX bad-request errors as alias mismatches', () => {
+		expect(isMexOrderAliasFallbackError(mexBadRequest())).toBe(true)
+		expect(isMexOrderAliasFallbackError(new Boom('Bad Request', { statusCode: 400 }))).toBe(false)
+		expect(isMexOrderAliasFallbackError(new Error('GraphQL server error: Bad Request'))).toBe(false)
 	})
 })
