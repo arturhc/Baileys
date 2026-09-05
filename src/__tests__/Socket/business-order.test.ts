@@ -79,8 +79,9 @@ describe('business order socket', () => {
 		expect(logger.debug).toHaveBeenCalledWith(
 			{
 				queryId: '26593811266898374',
-				orderId: 'order-1',
-				jid: '15550000001@s.whatsapp.net'
+				requestedJidType: 'lid',
+				resolvedJidType: 'pn',
+				usedOwnPnAlias: true
 			},
 			'querying order details through MEX'
 		)

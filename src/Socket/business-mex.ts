@@ -55,7 +55,16 @@ export const fetchMexOrderDetails = async ({
 	const jid = resolveOrderMexJid(requestedJid, ownJids)
 	if (!jid) throw new Boom('Order details require a valid seller JID', { statusCode: 400 })
 
-	logger.debug({ queryId: BUSINESS_ORDER_MEX_QUERY.queryId, orderId, jid }, 'querying order details through MEX')
+	const requested = jidNormalizedUser(requestedJid)
+	logger.debug(
+		{
+			queryId: BUSINESS_ORDER_MEX_QUERY.queryId,
+			requestedJidType: isLidUser(requested) ? 'lid' : isPnUser(requested) ? 'pn' : 'other',
+			resolvedJidType: isLidUser(jid) ? 'lid' : isPnUser(jid) ? 'pn' : 'other',
+			usedOwnPnAlias: isLidUser(requested) && isPnUser(jid)
+		},
+		'querying order details through MEX'
+	)
 	const result = await executeQuery(
 		orderMexVariables(jid, orderId, token),
 		BUSINESS_ORDER_MEX_QUERY.queryId,
